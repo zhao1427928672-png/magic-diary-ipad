@@ -1,12 +1,12 @@
 @font-face {
   font-family: 'DiaryHandwriting';
-  src: url('/fonts/DiaryHandwriting.ttf') format('truetype');
+  src: url('../public/fonts/DiaryHandwriting.ttf') format('truetype');
   font-display: swap;
 }
 
 @font-face {
   font-family: 'XinDiPaoTi';
-  src: url('/fonts/XinDiPaoTi.otf') format('opentype');
+  src: url('../public/fonts/XinDiPaoTi.otf') format('opentype');
   font-display: swap;
 }
 

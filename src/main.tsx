@@ -12,7 +12,8 @@ type Phase = 'listening' | 'pending' | 'drinking' | 'thinking' | 'replying' | 'l
 type BBox = { x: number; y: number; w: number; h: number };
 
 const MOCK_REPLY = '墨迹已经告诉我了。你不是想要一个立刻响亮的答案，而是想确认这条路能不能走。先把能验证的那一步写下来，别急着把整座城都画完。纸会记住你留下的每一道痕迹，也会慢慢抹去那些不必再背着的念头。';
-const PAPER_TEXTURE_SRC = '/assets/parchment-texture.png';
+const ASSET_BASE = import.meta.env.BASE_URL || '/';
+const PAPER_TEXTURE_SRC = `${ASSET_BASE}assets/parchment-texture.png`;
 
 const paperTexture = new Image();
 paperTexture.src = PAPER_TEXTURE_SRC;
