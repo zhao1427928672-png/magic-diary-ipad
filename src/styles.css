@@ -1,13 +1,19 @@
 @font-face {
   font-family: 'DiaryHandwriting';
-  src: url('/fonts/DiaryHandwriting.ttf') format('truetype');
+  src: url('/fonts/DiaryHandwriting-subset.woff2') format('woff2');
   font-display: swap;
+}
+
+@font-face {
+  font-family: 'DiaryHandwritingFull';
+  src: url('/fonts/DiaryHandwriting.ttf') format('truetype');
+  font-display: optional;
 }
 
 @font-face {
   font-family: 'XinDiPaoTi';
   src: url('/fonts/XinDiPaoTi.otf') format('opentype');
-  font-display: swap;
+  font-display: optional;
 }
 
 * {

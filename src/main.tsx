@@ -109,7 +109,7 @@ function modelOptionsCacheKey(baseUrl: string) {
 }
 
 const FONT_OPTIONS: FontOption[] = [
-  { id: 'xindi-xiawucha', name: '新蒂下午茶白金版', family: 'DiaryHandwriting' },
+  { id: 'xindi-xiawucha', name: '新蒂下午茶白金版', family: 'DiaryHandwriting, DiaryHandwritingFull' },
   { id: 'xindi-paoti', name: '新蒂泡体', family: 'XinDiPaoTi' },
   { id: 'system-kaiti', name: '系统楷体', family: 'Kaiti SC, STKaiti, serif' },
 ];
