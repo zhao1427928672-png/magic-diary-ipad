@@ -26,7 +26,7 @@ type FontOption = {
 };
 
 type Settings = {
-  schemaVersion: 1;
+  schemaVersion: number;
   ui: {
     expandedSections: Record<string, boolean>;
   };
@@ -116,7 +116,7 @@ const FONT_OPTIONS: FontOption[] = [
 
 function createDefaultSettings(): Settings {
   return {
-  schemaVersion: 1,
+  schemaVersion: 2,
   ui: {
     expandedSections: {
       ai: true,
@@ -136,7 +136,7 @@ function createDefaultSettings(): Settings {
     apiKey: '',
     modelMode: 'single',
     recognitionMode: 'vision',
-    replyPipeline: 'stable',
+    replyPipeline: 'fast-single',
     model: 'gpt-4o-mini',
     visionModel: '',
     replyModel: '',
@@ -160,9 +160,9 @@ function createDefaultSettings(): Settings {
     maxWidth: 720,
   },
   animation: {
-    speedPreset: 'standard',
-    handwritingFadeMs: 1100,
-    replyFadeInMs: 1000,
+    speedPreset: 'slow',
+    handwritingFadeMs: 1600,
+    replyFadeInMs: 1800,
     replyLingerMinMs: 950,
     replyLingerMaxMs: 2200,
     replyLingerPerLineMs: 260,
@@ -171,10 +171,10 @@ function createDefaultSettings(): Settings {
     wholeFadeLineThreshold: 1,
   },
   input: {
-    idlePreset: 'standard',
-    idleCommitMs: 1600,
+    idlePreset: 'fast',
+    idleCommitMs: 900,
     onWriteDuringReply: 'fade-out',
-    strikeTargets: ['user-ink', 'ai-reply'],
+    strikeTargets: [],
     touchPressure: 0.85,
     penBaseWidth: 1.8,
   },
@@ -190,10 +190,10 @@ function createDefaultSettings(): Settings {
     positionMode: 'auto',
   },
   persona: {
-    presetId: 'old-paper-reply',
-    replyLength: 'short',
-    replyMode: 'reflective',
-    tone: 'warm',
+    presetId: 'riddle-diary',
+    replyLength: 'very-short',
+    replyMode: 'oracle',
+    tone: 'mysterious',
     useCustomPrompt: false,
     customSystemPrompt: '',
     negativePrompt: '不要自称 AI。不要长篇说教。不要使用网络热词。不要编造用户没有写下的事实。',
@@ -231,7 +231,18 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.reply = clean.reply && typeof clean.reply === 'object' ? clean.reply : defaults.reply;
   clean.persona = clean.persona && typeof clean.persona === 'object' ? clean.persona : defaults.persona;
   const oneOf = <T extends string>(value: T, allowed: readonly T[], fallback: T) => allowed.includes(value) ? value : fallback;
-  clean.schemaVersion = 1;
+  const incomingSchemaVersion = Number((settings as any)?.schemaVersion) || 1;
+  if (incomingSchemaVersion < 2) {
+    clean.ai.replyPipeline = 'fast-single';
+    clean.animation.speedPreset = 'slow';
+    clean.input.idlePreset = 'fast';
+    clean.input.strikeTargets = [];
+    clean.persona.presetId = 'riddle-diary';
+    clean.persona.replyLength = 'very-short';
+    clean.persona.replyMode = 'oracle';
+    clean.persona.tone = 'mysterious';
+  }
+  clean.schemaVersion = 2;
   clean.ai.enabled = Boolean(clean.ai.enabled);
   clean.ai.adapter = oneOf(clean.ai.adapter, ['openai-compatible', 'custom-http'] as const, 'openai-compatible');
   clean.ai.modelMode = oneOf(clean.ai.modelMode, ['single', 'split'] as const, 'single');
