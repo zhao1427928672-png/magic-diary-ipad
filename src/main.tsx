@@ -841,6 +841,13 @@ function App() {
     return { sentences: out, rest };
   }
 
+  function replyTokenBudget() {
+    if (settings.persona.replyLength === 'very-short') return Math.min(settings.ai.maxTokens, 180);
+    if (settings.persona.replyLength === 'short') return Math.min(settings.ai.maxTokens, 360);
+    if (settings.persona.replyLength === 'standard') return Math.min(settings.ai.maxTokens, 700);
+    return Math.min(settings.ai.maxTokens, 1200);
+  }
+
   async function postChatCompletionStreamSentences(model: string, messages: unknown[], onSentence: (sentence: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens) {
     if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
@@ -906,6 +913,7 @@ function App() {
     };
     try {
       const requestStartedAt = performance.now();
+      const shouldReturnEarly = settings.persona.replyLength === 'very-short' && settings.persona.presetId !== 'none';
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
       let res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
         method: 'POST',
@@ -949,8 +957,8 @@ function App() {
             acc += frag;
             const first = firstSentence(acc);
             const elapsed = performance.now() - requestStartedAt;
-            const earlyPartial = elapsed > 700 && acc.trim().length >= 4 ? acc.trim() : '';
-            if (first || earlyPartial) {
+            const earlyPartial = shouldReturnEarly && elapsed > 700 && acc.trim().length >= 4 ? acc.trim() : '';
+            if (shouldReturnEarly && (first || earlyPartial)) {
               setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstSentenceMs: Math.round(elapsed), replyEarlyPartial: first ? 'no' : 'yes' } }));
               controller.abort();
               const visible = first || earlyPartial;
@@ -981,13 +989,13 @@ function App() {
         { role: 'user', content: [
           { type: 'text', text: settings.persona.presetId === 'none'
             ? '读懂图片里的手写内容后，直接回答用户写下的内容。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。每一句都尽快用句号或问号结束。'
-            : '读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。只输出日记本身浮现出的短回信，每一句都尽快用句号或问号结束。' },
+            : `读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。按当前回复长度设置输出，不要故意截短；每一句都尽快用句号或问号结束。当前回复长度：${settings.persona.replyLength}。` },
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
       ];
       return onSentence
-        ? await postChatCompletionStreamSentences(replyModel, messages, onSentence, Math.min(settings.ai.maxTokens, 260))
-        : await postChatCompletionFirstSentence(replyModel, messages, Math.min(settings.ai.maxTokens, 260));
+        ? await postChatCompletionStreamSentences(replyModel, messages, onSentence, replyTokenBudget())
+        : await postChatCompletionFirstSentence(replyModel, messages, replyTokenBudget());
     }
     const recognizedText = await postChatCompletion(visionModel, [
       { role: 'system', content: '你是严格的手写 OCR。只识别图片中的真实手写内容。不要解释，不要回答问题，不要发挥；看不清就输出“看不清”。' },
@@ -1000,16 +1008,16 @@ function App() {
     if (!recognizedText || recognizedText.includes('看不清')) return '我看见墨迹了，但这次没有读清。你可以写大一点，或者把字间距留开些。';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
-      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请严格按系统人格回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
-    ]);
+      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
+    ], replyTokenBudget());
   }
 
   async function replyFromRecognizedText(recognizedText: string) {
     const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
-      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请严格按系统人格回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
-    ]);
+      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
+    ], replyTokenBudget());
   }
 
   async function generateReplyFromInk(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void) {
