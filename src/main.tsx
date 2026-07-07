@@ -871,10 +871,13 @@ function App() {
             }
             acc += frag;
             const first = firstSentence(acc);
-            if (first) {
-              setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstSentenceMs: Math.round(performance.now() - requestStartedAt) } }));
+            const elapsed = performance.now() - requestStartedAt;
+            const earlyPartial = elapsed > 700 && acc.trim().length >= 4 ? acc.trim() : '';
+            if (first || earlyPartial) {
+              setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstSentenceMs: Math.round(elapsed), replyEarlyPartial: first ? 'no' : 'yes' } }));
               controller.abort();
-              return cleanDiaryReply(first) || first;
+              const visible = first || earlyPartial;
+              return cleanDiaryReply(visible) || visible;
             }
           } catch {
             // Ignore malformed provider chunks and keep reading.
@@ -971,12 +974,22 @@ function App() {
     setStatus('纸页正在读走你的墨迹……');
     const generation = ++replyGenerationRef.current;
     clearReplyTimers();
-    let drinkDone = false;
+    let revealReady = false;
+    let replyStarted = false;
     let replyText: string | null = null;
     const maybeStartReply = () => {
-      if (!drinkDone || replyText === null) return;
-      if (inkGenerationRef.current === inkGeneration && replyGenerationRef.current === generation) startReply(replyText);
+      if (!revealReady || replyText === null || replyStarted) return;
+      if (inkGenerationRef.current === inkGeneration && replyGenerationRef.current === generation) {
+        replyStarted = true;
+        startReply(replyText);
+      }
     };
+    window.setTimeout(() => {
+      if (inkGenerationRef.current !== inkGeneration || replyGenerationRef.current !== generation) return;
+      revealReady = true;
+      setStatus(replyText === null ? '日记正在回信……' : '墨迹开始浮现。');
+      maybeStartReply();
+    }, Math.min(550, settings.animation.handwritingFadeMs));
     void generateReplyFromInk(imageDataUrl).then((reply) => {
       replyText = reply;
       maybeStartReply();
@@ -1007,9 +1020,10 @@ function App() {
         ctxs.ink.clearRect(0, 0, w, h);
         ctxs.effects.clearRect(0, 0, w, h);
         strokesRef.current = [];
-        drinkDone = true;
-        setPhase('thinking');
-        setStatus('日记正在回信……');
+        if (!replyStarted) {
+          setPhase('thinking');
+          setStatus('日记正在回信……');
+        }
         maybeStartReply();
       }
     };
@@ -1128,10 +1142,11 @@ function App() {
     const fadeIn = () => {
       if (replyGenerationRef.current !== generation) return;
       const t = clamp((performance.now() - start) / duration, 0, 1);
-      // Slower start so the text genuinely emerges instead of popping in.
+      // Keep the slow ink-emergence feeling, but make the first reply visible quickly.
       const eased = t * t * (3 - 2 * t);
+      const visibleAlpha = 0.18 + eased * 0.82;
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLines(ctxs.reply, lines, fontSpecValue, () => eased);
+      drawReplyLines(ctxs.reply, lines, fontSpecValue, () => visibleAlpha);
       if (t < 1) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
