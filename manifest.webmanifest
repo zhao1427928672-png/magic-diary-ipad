@@ -1,0 +1,11 @@
+{
+  "name": "魔法日记",
+  "short_name": "魔法日记",
+  "start_url": "/magic-diary-ipad/",
+  "scope": "/magic-diary-ipad/",
+  "display": "fullscreen",
+  "background_color": "#d8ad64",
+  "theme_color": "#d8ad64",
+  "orientation": "any",
+  "icons": []
+}
