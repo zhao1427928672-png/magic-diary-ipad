@@ -27,6 +27,20 @@ assert(history.length === 50, `history should be capped at 50, got ${history.len
 assert(history[0].inputText === 'q10', `oldest entries should be trimmed, got ${history[0].inputText}`);
 assert(history.at(-1).inputText === 'q59', 'newest entry should be kept');
 
+addHistoryEntry({ inputText: 'x'.repeat(2000), reply: 'y'.repeat(3000) });
+history = loadHistory();
+assert(history.at(-1).inputText.endsWith('…'), 'long input should be trimmed');
+assert(history.at(-1).reply.endsWith('…'), 'long reply should be trimmed');
+assert(history.at(-1).inputText.length <= 1201, 'trimmed input should stay bounded');
+assert(history.at(-1).reply.length <= 2401, 'trimmed reply should stay bounded');
+
+store.set('magic-diary-history-v1', '{bad json');
+assert(loadHistory().length === 0, 'bad JSON should be ignored');
+store.set('magic-diary-history-v1', JSON.stringify([{ reply: 123 }, { reply: 'ok', at: 'bad-date', id: '' }]));
+history = loadHistory();
+assert(history.length === 1 && history[0].reply === 'ok', 'invalid entries should be filtered and valid entries normalized');
+assert(!Number.isNaN(Date.parse(history[0].at)), 'invalid date should be normalized');
+
 clearHistory();
 assert(loadHistory().length === 0, 'clear should remove all history');
 console.log('history-store tests passed');

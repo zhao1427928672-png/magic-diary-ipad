@@ -1,1 +1,19 @@
-{"scripts":{"dev":"vite --host 0.0.0.0","build":"tsc && vite build","preview":"vite preview --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"latest","react":"latest","react-dom":"latest","typescript":"latest","vite":"latest"},"devDependencies":{"@types/react":"^19.2.17","@types/react-dom":"^19.2.3"}}
+{
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "npx --yes tsx scripts/test-history-store.mjs && npx --yes tsx scripts/test-script-ink.mjs && node scripts/test-reply-position.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3"
+  }
+}

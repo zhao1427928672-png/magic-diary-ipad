@@ -1761,9 +1761,11 @@ function App() {
   }
 
   function clearConversationHistory() {
+    if (!window.confirm('清空历史记录？这只会删除本地历史，不会删除设置里的 API Key。')) return;
     clearHistory();
     setHistoryEntries([]);
-    setStatus('历史记录已清空。');
+    setDebugSample(null);
+    setStatus('历史记录已清空，最近裁剪调试图也已清除。');
   }
 
   return (
@@ -2005,7 +2007,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
         </Section>
 
         <Section id="history" title={`历史对话记录（${historyEntries.length}）`} settings={settings} toggleSection={toggleSection}>
-          <p className="hint-text">只保存文字、模型和人格，不保存手写截图和 API Key。最多保留最近 50 条。</p>
+          <p className="hint-text">历史是本机浏览器明文保存：只保存文字、模型和人格，不保存手写截图和 API Key。注意：API Key 仍会保存在“设置”里，清空历史不会删除它。最多保留最近 50 条，超长文本会自动截断。</p>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={clearConversationHistory}>清空历史</button>
           </div>
