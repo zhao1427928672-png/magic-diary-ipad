@@ -117,7 +117,7 @@ const FONT_OPTIONS: FontOption[] = [
 
 function createDefaultSettings(): Settings {
   return {
-  schemaVersion: 2,
+  schemaVersion: 3,
   ui: {
     expandedSections: {
       ai: true,
@@ -148,7 +148,7 @@ function createDefaultSettings(): Settings {
     customHeaders: '{\n  "Authorization": "Bearer {{apiKey}}",\n  "Content-Type": "application/json"\n}',
     customBody: '',
     customResponsePath: 'choices.0.message.content',
-    visionImage: { padding: 44, maxSize: 1024, background: 'white', format: 'image/png' },
+    visionImage: { padding: 32, maxSize: 768, background: 'white', format: 'image/webp' },
   },
   font: {
     selectedFontId: 'xindi-xiawucha',
@@ -244,7 +244,12 @@ function sanitizeSettings(settings: Settings): Settings {
     clean.persona.replyMode = 'oracle';
     clean.persona.tone = 'mysterious';
   }
-  clean.schemaVersion = 2;
+  if (incomingSchemaVersion < 3) {
+    clean.ai.visionImage.padding = 32;
+    clean.ai.visionImage.maxSize = 768;
+    clean.ai.visionImage.format = 'image/webp';
+  }
+  clean.schemaVersion = 3;
   clean.ai.enabled = Boolean(clean.ai.enabled);
   clean.ai.adapter = oneOf(clean.ai.adapter, ['openai-compatible', 'custom-http'] as const, 'openai-compatible');
   clean.ai.modelMode = oneOf(clean.ai.modelMode, ['single', 'split'] as const, 'single');
@@ -253,10 +258,10 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.ai.temperature = clamp(Number(clean.ai.temperature) || 0.7, 0, 2);
   clean.ai.maxTokens = clamp(Number(clean.ai.maxTokens) || 360, 80, 4000);
   clean.ai.timeoutMs = clamp(Number(clean.ai.timeoutMs) || 45000, 5000, 120000);
-  clean.ai.visionImage.padding = clamp(Number(clean.ai.visionImage.padding) || 44, 0, 160);
-  clean.ai.visionImage.maxSize = clamp(Number(clean.ai.visionImage.maxSize) || 1024, 256, 2048);
+  clean.ai.visionImage.padding = clamp(Number(clean.ai.visionImage.padding) || 32, 0, 160);
+  clean.ai.visionImage.maxSize = clamp(Number(clean.ai.visionImage.maxSize) || 768, 256, 2048);
   clean.ai.visionImage.background = oneOf(clean.ai.visionImage.background, ['white', 'transparent', 'paper'] as const, 'white');
-  clean.ai.visionImage.format = oneOf(clean.ai.visionImage.format, ['image/png', 'image/webp'] as const, 'image/png');
+  clean.ai.visionImage.format = oneOf(clean.ai.visionImage.format, ['image/png', 'image/webp'] as const, 'image/webp');
   clean.font.selectedFontId = FONT_OPTIONS.some((font) => font.id === clean.font.selectedFontId) ? clean.font.selectedFontId : 'xindi-xiawucha';
   clean.font.sizePreset = oneOf(clean.font.sizePreset, ['small', 'medium', 'large', 'custom'] as const, 'medium');
   clean.font.fontSizePx = clamp(Number(clean.font.fontSizePx) || 24, 16, 96);
@@ -968,7 +973,11 @@ function App() {
     const strokesSnapshot = strokesRef.current.map((stroke) => ({ points: stroke.points.map((p) => ({ ...p })) }));
     const bbox = bboxForStrokes(strokesSnapshot);
     if (!bbox) return;
+    const captureStartedAt = performance.now();
     const imageDataUrl = captureInkImage(bbox, strokesSnapshot);
+    const captureMs = Math.round(performance.now() - captureStartedAt);
+    const imagePayloadKb = Math.round(imageDataUrl.length / 1024);
+    setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), captureMs, imagePayloadKb, imageFormat: settings.ai.visionImage.format, imageMaxSize: settings.ai.visionImage.maxSize } }));
     lastInputBoxRef.current = bboxForStrokes(strokesSnapshot, 8) || bbox;
     setPhase('drinking');
     setStatus('纸页正在读走你的墨迹……');
@@ -1664,6 +1673,13 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label={`创造性 ${settings.ai.temperature.toFixed(2)}`}><input type="range" min="0" max="2" step="0.05" value={settings.ai.temperature} onChange={(e) => updateSettings((d) => { d.ai.temperature = Number(e.target.value); })} /></Field>
           <Field label={`最大输出 ${settings.ai.maxTokens}`}><input type="range" min="80" max="4000" step="20" value={settings.ai.maxTokens} onChange={(e) => updateSettings((d) => { d.ai.maxTokens = Number(e.target.value); })} /></Field>
           <Field label={`裁剪留白 ${settings.ai.visionImage.padding}px`}><input type="range" min="0" max="160" value={settings.ai.visionImage.padding} onChange={(e) => updateSettings((d) => { d.ai.visionImage.padding = Number(e.target.value); })} /></Field>
+          <Field label={`图片尺寸上限 ${settings.ai.visionImage.maxSize}px`}><input type="range" min="256" max="2048" step="64" value={settings.ai.visionImage.maxSize} onChange={(e) => updateSettings((d) => { d.ai.visionImage.maxSize = Number(e.target.value); })} /></Field>
+          <Field label="识别图片格式">
+            <select value={settings.ai.visionImage.format} onChange={(e) => updateSettings((d) => { d.ai.visionImage.format = e.target.value as Settings['ai']['visionImage']['format']; })}>
+              <option value="image/webp">WebP：更小更快</option>
+              <option value="image/png">PNG：兼容但更大</option>
+            </select>
+          </Field>
           <Field label="识别图片背景">
             <select value={settings.ai.visionImage.background} onChange={(e) => updateSettings((d) => { d.ai.visionImage.background = e.target.value as Settings['ai']['visionImage']['background']; })}>
               <option value="white">白底</option>
