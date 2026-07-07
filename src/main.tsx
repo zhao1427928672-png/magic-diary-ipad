@@ -6,7 +6,7 @@ import './styles.css';
 type Point = { x: number; y: number; pressure: number; t: number };
 type Stroke = { points: Point[] };
 type StrikeCandidate = { bbox: BBox; at: number };
-type ReplyLine = { text: string; x: number; y: number; width: number; canvas?: HTMLCanvasElement };
+type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement };
 type Phase = 'listening' | 'pending' | 'drinking' | 'thinking' | 'replying' | 'lingering';
 
 type BBox = { x: number; y: number; w: number; h: number };
@@ -1076,6 +1076,67 @@ function App() {
     ctx.globalAlpha = 1;
   }
 
+  function drawReplyLinesWriting(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const padX = 12;
+    const padY = 10;
+    const totalChars = Math.max(1, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0));
+    let charOffset = 0;
+    for (const line of lines) {
+      if (!line.canvas) { charOffset += Array.from(line.text).length; continue; }
+      const chars = Array.from(line.text);
+      const lineCanvasW = line.canvas.width / dpr;
+      const lineCanvasH = line.canvas.height / dpr;
+      for (let i = 0; i < chars.length; i += 1) {
+        const global = charOffset + i;
+        const local = clamp(progress * totalChars - global, 0, 1);
+        if (local <= 0) continue;
+        const left = i === 0 ? 0 : (line.charEnds?.[i - 1] ?? 0);
+        const right = line.charEnds?.[i] ?? line.width;
+        const visibleRight = left + (right - left) * local;
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, 0.22 + local * 0.78);
+        ctx.beginPath();
+        ctx.rect(line.x - padX, line.y - padY, padX + visibleRight + 8, lineCanvasH);
+        ctx.clip();
+        ctx.drawImage(line.canvas, line.x - padX, line.y - padY, lineCanvasW, lineCanvasH);
+        ctx.restore();
+      }
+      charOffset += chars.length;
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawReplyLinesVanishing(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const padX = 12;
+    const padY = 10;
+    const totalChars = Math.max(1, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0));
+    let charOffset = 0;
+    for (const line of lines) {
+      if (!line.canvas) { charOffset += Array.from(line.text).length; continue; }
+      const chars = Array.from(line.text);
+      const lineCanvasW = line.canvas.width / dpr;
+      const lineCanvasH = line.canvas.height / dpr;
+      for (let i = 0; i < chars.length; i += 1) {
+        const global = charOffset + i;
+        const local = clamp(progress * totalChars - global, 0, 1);
+        if (local >= 1) continue;
+        const left = i === 0 ? 0 : (line.charEnds?.[i - 1] ?? 0);
+        const right = line.charEnds?.[i] ?? line.width;
+        ctx.save();
+        ctx.globalAlpha = 1 - Math.max(0, local - 0.15) / 0.85;
+        ctx.beginPath();
+        ctx.rect(line.x + left - 4, line.y - padY, right - left + 14, lineCanvasH);
+        ctx.clip();
+        ctx.drawImage(line.canvas, line.x - padX, line.y - padY, lineCanvasW, lineCanvasH);
+        ctx.restore();
+      }
+      charOffset += chars.length;
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function bboxForReplyLine(line: ReplyLine): BBox | null {
     if (!line.canvas) return null;
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
@@ -1142,6 +1203,11 @@ function App() {
       replyLine.y = position.y + index * replyLineHeight;
     });
     for (const replyLine of lines) {
+      let acc = '';
+      replyLine.charEnds = Array.from(replyLine.text).map((ch) => {
+        acc += ch;
+        return ctxs.reply.measureText(acc).width;
+      });
       replyLine.canvas = makeReplyLineCanvas(replyLine, fontSpecValue, settings);
     }
     replyLinesRef.current = lines;
@@ -1151,11 +1217,9 @@ function App() {
     const fadeIn = () => {
       if (replyGenerationRef.current !== generation) return;
       const t = clamp((performance.now() - start) / duration, 0, 1);
-      // Keep the slow ink-emergence feeling, but make the first reply visible quickly.
       const eased = t * t * (3 - 2 * t);
-      const visibleAlpha = 0.18 + eased * 0.82;
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLines(ctxs.reply, lines, fontSpecValue, () => visibleAlpha);
+      drawReplyLinesWriting(ctxs.reply, lines, eased);
       if (t < 1) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
@@ -1186,31 +1250,14 @@ function App() {
     }
 
     const start = performance.now();
-    // Only a single-line reply should fade as one block.
-    // iPad widths often wrap the same reply into 2–3 lines; those still need staggered line fade.
-    const wholeFade = lines.length <= settings.animation.wholeFadeLineThreshold;
-    const wholeFadeDuration = settings.animation.replyLineFadeMs;
-    const lineFadeDuration = settings.animation.replyLineFadeMs;
-    const lineDelay = settings.animation.replyLineDelayMs;
-    const totalDuration = wholeFade
-      ? wholeFadeDuration
-      : lineFadeDuration + Math.max(0, lines.length - 1) * lineDelay;
+    const totalDuration = settings.animation.replyLineFadeMs + Math.max(0, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0) - 1) * 34;
 
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
+      const progress = clamp(elapsed / totalDuration, 0, 1);
       ctxs.reply.clearRect(0, 0, w, h);
-      if (wholeFade) {
-        const local = clamp(elapsed / wholeFadeDuration, 0, 1);
-        const eased = 1 - Math.pow(1 - local, 2.0);
-        drawReplyLines(ctxs.reply, lines, fontSpec, () => 1 - eased);
-      } else {
-        drawReplyLines(ctxs.reply, lines, fontSpec, (_line, index) => {
-          const local = clamp((elapsed - index * lineDelay) / lineFadeDuration, 0, 1);
-          const eased = 1 - Math.pow(1 - local, 2.1);
-          return 1 - eased;
-        });
-      }
+      drawReplyLinesVanishing(ctxs.reply, lines, 1 - Math.pow(1 - progress, 2.0));
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
