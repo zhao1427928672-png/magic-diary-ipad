@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
+import { strokesForText, type InkStroke } from './scriptInk';
 import './styles.css';
 
 type Point = { x: number; y: number; pressure: number; t: number };
 type Stroke = { points: Point[] };
 type StrikeCandidate = { bbox: BBox; at: number };
-type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement };
+type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement; quillStrokes?: InkStroke[]; quillScale?: number };
 type Phase = 'listening' | 'pending' | 'drinking' | 'thinking' | 'replying' | 'lingering';
 
 type BBox = { x: number; y: number; w: number; h: number };
@@ -1107,6 +1108,56 @@ function App() {
     ctx.globalAlpha = 1;
   }
 
+  function strokeLength(stroke: InkStroke) {
+    let len = 0;
+    for (let i = 1; i < stroke.length; i += 1) len += Math.hypot(stroke[i].x - stroke[i - 1].x, stroke[i].y - stroke[i - 1].y);
+    return len;
+  }
+
+  function drawPartialStroke(ctx: CanvasRenderingContext2D, stroke: InkStroke, x: number, y: number, scale: number, progress: number) {
+    if (stroke.length < 2 || progress <= 0) return;
+    const total = Math.max(1, strokeLength(stroke));
+    let remaining = total * clamp(progress, 0, 1);
+    ctx.beginPath();
+    ctx.moveTo(x + stroke[0].x * scale, y + stroke[0].y * scale);
+    for (let i = 1; i < stroke.length; i += 1) {
+      const a = stroke[i - 1];
+      const b = stroke[i];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      if (remaining >= seg) {
+        ctx.lineTo(x + b.x * scale, y + b.y * scale);
+        remaining -= seg;
+      } else {
+        const t = seg <= 0 ? 1 : remaining / seg;
+        ctx.lineTo(x + (a.x + (b.x - a.x) * t) * scale, y + (a.y + (b.y - a.y) * t) * scale);
+        break;
+      }
+    }
+    ctx.stroke();
+  }
+
+  function drawReplyQuillWriting(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number, settings: Settings) {
+    const all = lines.flatMap((line) => (line.quillStrokes || []).map((stroke) => ({ line, stroke, len: strokeLength(stroke) * (line.quillScale || 1) })));
+    const total = Math.max(1, all.reduce((sum, item) => sum + item.len, 0) + Math.max(0, all.length - 1) * 14);
+    let cursor = 0;
+    ctx.save();
+    ctx.strokeStyle = settings.font.inkColor;
+    ctx.globalAlpha = settings.font.inkOpacity;
+    ctx.lineWidth = 2.1;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = 'rgba(40, 22, 0, .16)';
+    ctx.shadowBlur = settings.font.shadowStrength;
+    const drawn = progress * total;
+    for (const item of all) {
+      const start = cursor;
+      const local = clamp((drawn - start) / Math.max(1, item.len), 0, 1);
+      if (local > 0) drawPartialStroke(ctx, item.stroke, item.line.x, item.line.y, item.line.quillScale || 1, local);
+      cursor += item.len + 14;
+    }
+    ctx.restore();
+  }
+
   function drawReplyLinesVanishing(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number) {
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     const padX = 12;
@@ -1202,6 +1253,8 @@ function App() {
       replyLine.x = position.x;
       replyLine.y = position.y + index * replyLineHeight;
     });
+    const quillFontSize = 96;
+    const quillFontSpec = fontSpecValue.replace(/^\d+(?:\.\d+)?px/, `${quillFontSize}px`);
     for (const replyLine of lines) {
       let acc = '';
       replyLine.charEnds = Array.from(replyLine.text).map((ch) => {
@@ -1209,6 +1262,13 @@ function App() {
         return ctxs.reply.measureText(acc).width;
       });
       replyLine.canvas = makeReplyLineCanvas(replyLine, fontSpecValue, settings);
+      try {
+        replyLine.quillStrokes = strokesForText(replyLine.text, quillFontSpec).slice(0, 900);
+        replyLine.quillScale = replyFontSize / quillFontSize;
+      } catch {
+        replyLine.quillStrokes = [];
+        replyLine.quillScale = 1;
+      }
     }
     replyLinesRef.current = lines;
 
@@ -1219,7 +1279,8 @@ function App() {
       const t = clamp((performance.now() - start) / duration, 0, 1);
       const eased = t * t * (3 - 2 * t);
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLinesWriting(ctxs.reply, lines, eased);
+      if (lines.some((line) => line.quillStrokes?.length)) drawReplyQuillWriting(ctxs.reply, lines, eased, settings);
+      else drawReplyLinesWriting(ctxs.reply, lines, eased);
       if (t < 1) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
