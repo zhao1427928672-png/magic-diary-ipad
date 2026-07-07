@@ -483,6 +483,7 @@ type DebugSample = {
   reply?: string;
   error?: string;
   model?: string;
+  timings?: Record<string, number | string>;
   at?: string;
 };
 
@@ -773,6 +774,7 @@ function App() {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     try {
+      const requestStartedAt = performance.now();
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
       let res = await fetchWithRetry(aiProxyUrl('chat'), {
         method: 'POST',
@@ -790,6 +792,8 @@ function App() {
       }
       if (!res.ok) throw new Error(`AI 请求失败：HTTP ${res.status} ${await res.text()}`);
       const data = await res.json();
+      const elapsedMs = Math.round(performance.now() - requestStartedAt);
+      setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyNonStreamMs: elapsedMs } }));
       const text = String(data?.choices?.[0]?.message?.content || '').trim();
       return cleanDiaryReply(text) || text;
     } catch (error) {
@@ -813,6 +817,7 @@ function App() {
       return match?.[1]?.trim() || '';
     };
     try {
+      const requestStartedAt = performance.now();
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
       let res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
         method: 'POST',
@@ -833,6 +838,7 @@ function App() {
       const decoder = new TextDecoder();
       let buffer = '';
       let acc = '';
+      let sawFirstChunk = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -848,9 +854,14 @@ function App() {
             const json = JSON.parse(data);
             const frag = json?.choices?.[0]?.delta?.content || '';
             if (!frag) continue;
+            if (!sawFirstChunk) {
+              sawFirstChunk = true;
+              setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstChunkMs: Math.round(performance.now() - requestStartedAt) } }));
+            }
             acc += frag;
             const first = firstSentence(acc);
             if (first) {
+              setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstSentenceMs: Math.round(performance.now() - requestStartedAt) } }));
               controller.abort();
               return cleanDiaryReply(first) || first;
             }
@@ -906,6 +917,7 @@ function App() {
   }
 
   async function generateReplyFromInk(imageDataUrl: string) {
+    const totalStartedAt = performance.now();
     const scribble = scribbleText.trim();
     if (!settings.ai.enabled) {
       const reply = mockReplyForPersona(settings);
@@ -923,7 +935,7 @@ function App() {
       }
       if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
       const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl);
-      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString() }));
+      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
       return reply;
     } catch (error) {
@@ -1052,7 +1064,8 @@ function App() {
     const fontSpecValue = spec;
     replyFontRef.current = fontSpecValue;
     try {
-      await document.fonts?.load(fontSpecValue);
+      const family = selectedFont(settings).family.split(',')[0].replace(/["']/g, '').trim();
+      await document.fonts?.load(`${replyFontSize}px "${family}"`);
       await document.fonts?.ready;
     } catch {
       // If the browser refuses font loading, fall back silently.
@@ -1629,7 +1642,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           </div>
           {debugSample && <div className="debug-sample">
             {debugSample.imageDataUrl && <img className="debug-image" src={debugSample.imageDataUrl} alt="最近一次传给 AI 的裁剪墨迹图" />}
-            <pre className="debug-box">{JSON.stringify({ 时间: debugSample.at, 模型: debugSample.model, 识别文字: debugSample.recognizedText, 回信: debugSample.reply, 错误: debugSample.error }, null, 2)}</pre>
+            <pre className="debug-box">{JSON.stringify({ 时间: debugSample.at, 模型: debugSample.model, 识别文字: debugSample.recognizedText, 回信: debugSample.reply, 错误: debugSample.error, 耗时: debugSample.timings }, null, 2)}</pre>
           </div>}
         </Section>
 
