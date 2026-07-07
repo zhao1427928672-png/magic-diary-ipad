@@ -52,20 +52,16 @@ async function handleChat(request, stream) {
   return withCors(upstream);
 }
 
-export default {
-  async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
-    const url = new URL(request.url);
-    try {
-      if (url.pathname === '/api/ai-proxy/models') return await handleModels(request);
-      if (url.pathname === '/api/ai-proxy/chat-stream') return await handleChat(request, true);
-      if (url.pathname === '/api/ai-proxy/chat') return await handleChat(request, false);
-      if (url.pathname.endsWith('/models')) return await handleModels(request);
-      if (url.pathname.endsWith('/chat-stream')) return await handleChat(request, true);
-      if (url.pathname.endsWith('/chat')) return await handleChat(request, false);
-      return env.ASSETS.fetch(request);
-    } catch (error) {
-      return json(500, { error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-};
+export async function onRequest(context) {
+  const { request, params } = context;
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+  const path = Array.isArray(params.path) ? params.path.join('/') : String(params.path || '');
+  try {
+    if (path === 'models') return await handleModels(request);
+    if (path === 'chat-stream') return await handleChat(request, true);
+    if (path === 'chat') return await handleChat(request, false);
+    return json(404, { error: '未知接口。' });
+  } catch (error) {
+    return json(500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
