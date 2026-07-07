@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
+import { addHistoryEntry, clearHistory, loadHistory, type HistoryEntry } from './historyStore';
 import { strokesForText, type InkStroke } from './scriptInk';
 import './styles.css';
 
@@ -579,6 +580,7 @@ function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugSample, setDebugSample] = useState<DebugSample | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => loadHistory());
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [scribbleText, setScribbleText] = useState('');
   const longPressTimerRef = useRef<number | null>(null);
@@ -792,6 +794,22 @@ function App() {
   function providerUrl(path: string) {
     const base = settings.ai.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
     return `${base}/v1/${path.replace(/^\/+/, '')}`;
+  }
+
+  function recordHistoryEntry(inputText: string | undefined, reply: string, model?: string) {
+    if (!reply.trim()) return;
+    try {
+      const entry = addHistoryEntry({
+        inputText: inputText?.trim() || undefined,
+        reply: reply.trim(),
+        model: model || settings.ai.model,
+        persona: settings.persona.presetId,
+        replyLength: settings.persona.replyLength,
+      });
+      setHistoryEntries((entries) => [...entries, entry].slice(-50));
+    } catch {
+      // Storage quota/private mode should never interrupt the diary.
+    }
   }
 
   async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
@@ -1031,6 +1049,7 @@ function App() {
     if (!settings.ai.enabled) {
       const reply = mockReplyForPersona(settings);
       setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, reply, model: 'mock', at: new Date().toISOString() });
+      recordHistoryEntry(scribble || undefined, reply, 'mock');
       setScribbleText('');
       return reply;
     }
@@ -1039,11 +1058,13 @@ function App() {
       if (settings.ai.recognitionMode !== 'vision' && scribble) {
         const reply = await replyFromRecognizedText(scribble);
         setDebugSample({ imageDataUrl, recognizedText: scribble, reply, model: settings.ai.model, at: new Date().toISOString() });
+        recordHistoryEntry(scribble, reply, settings.ai.model);
         setScribbleText('');
         return reply;
       }
       if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
       const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence);
+      recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
       setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
       return reply;
@@ -1735,6 +1756,12 @@ function App() {
     longPressTimerRef.current = null;
   }
 
+  function clearConversationHistory() {
+    clearHistory();
+    setHistoryEntries([]);
+    setStatus('历史记录已清空。');
+  }
+
   return (
     <main ref={shellRef} className="diary-shell">
       <canvas ref={paperRef} className="layer" aria-hidden="true" />
@@ -1787,6 +1814,8 @@ function App() {
           testLastCropRecognition={testLastCropRecognition}
           testPersonaReply={testPersonaReply}
           debugSample={debugSample}
+          historyEntries={historyEntries}
+          clearConversationHistory={clearConversationHistory}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -1828,7 +1857,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, historyEntries, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; historyEntries: HistoryEntry[]; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -1969,6 +1998,24 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           {debugSample && (debugSample.recognizedText || debugSample.reply || debugSample.error) && <div className="debug-sample">
             <pre className="debug-box">{JSON.stringify({ 当前人格: settings.persona.presetId, 测试输入: debugSample.recognizedText, 回信: debugSample.reply, 错误: debugSample.error, 模型: debugSample.model, 时间: debugSample.at }, null, 2)}</pre>
           </div>}
+        </Section>
+
+        <Section id="history" title={`历史对话记录（${historyEntries.length}）`} settings={settings} toggleSection={toggleSection}>
+          <p className="hint-text">只保存文字、模型和人格，不保存手写截图和 API Key。最多保留最近 50 条。</p>
+          <div className="settings-actions inline-actions">
+            <button type="button" onClick={clearConversationHistory}>清空历史</button>
+          </div>
+          {historyEntries.length === 0 ? <p className="hint-text">还没有历史记录。</p> : (
+            <div className="history-list">
+              {[...historyEntries].reverse().map((entry) => (
+                <article className="history-entry" key={entry.id}>
+                  <div className="history-meta">{new Date(entry.at).toLocaleString()} · {entry.persona || 'unknown'} · {entry.replyLength || '默认'} · {entry.model || 'mock'}</div>
+                  {entry.inputText && <p className="history-input">你写：{entry.inputText}</p>}
+                  <p className="history-reply">回信：{entry.reply}</p>
+                </article>
+              ))}
+            </div>
+          )}
         </Section>
 
         <Section id="font" title="字体与文字" settings={settings} toggleSection={toggleSection}>

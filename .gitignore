@@ -5,3 +5,4 @@ dist/
 .env.*
 .vite/
 node_modules/.vite/
+.venv-fonttools/

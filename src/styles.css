@@ -340,6 +340,41 @@ textarea {
   color: rgba(39, 23, 7, 0.74);
 }
 
+.history-list {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.history-entry {
+  border: 1px solid rgba(64, 38, 12, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 248, 226, 0.46);
+  padding: 10px;
+}
+
+.history-meta {
+  font-size: 11px;
+  color: rgba(39, 23, 7, 0.48);
+  margin-bottom: 6px;
+}
+
+.history-input,
+.history-reply {
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(39, 23, 7, 0.78);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-reply {
+  color: rgba(28, 15, 5, 0.88);
+}
+
 @media (max-width: 899px) {
   .settings-overlay {
     align-items: flex-end;
