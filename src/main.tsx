@@ -118,7 +118,7 @@ const FONT_OPTIONS: FontOption[] = [
 
 function createDefaultSettings(): Settings {
   return {
-  schemaVersion: 3,
+  schemaVersion: 4,
   ui: {
     expandedSections: {
       ai: true,
@@ -165,10 +165,10 @@ function createDefaultSettings(): Settings {
     speedPreset: 'slow',
     handwritingFadeMs: 1600,
     replyFadeInMs: 1800,
-    replyLingerMinMs: 950,
-    replyLingerMaxMs: 2200,
+    replyLingerMinMs: 5000,
+    replyLingerMaxMs: 7000,
     replyLingerPerLineMs: 260,
-    replyLineFadeMs: 1450,
+    replyLineFadeMs: 1800,
     replyLineDelayMs: 480,
     wholeFadeLineThreshold: 1,
   },
@@ -250,7 +250,12 @@ function sanitizeSettings(settings: Settings): Settings {
     clean.ai.visionImage.maxSize = 768;
     clean.ai.visionImage.format = 'image/webp';
   }
-  clean.schemaVersion = 3;
+  if (incomingSchemaVersion < 4) {
+    clean.animation.replyLingerMinMs = 5000;
+    clean.animation.replyLingerMaxMs = 7000;
+    clean.animation.replyLineFadeMs = 1800;
+  }
+  clean.schemaVersion = 4;
   clean.ai.enabled = Boolean(clean.ai.enabled);
   clean.ai.adapter = oneOf(clean.ai.adapter, ['openai-compatible', 'custom-http'] as const, 'openai-compatible');
   clean.ai.modelMode = oneOf(clean.ai.modelMode, ['single', 'split'] as const, 'single');
@@ -276,10 +281,10 @@ function sanitizeSettings(settings: Settings): Settings {
   if (clean.animation.speedPreset === 'fast') { clean.animation.handwritingFadeMs = 800; clean.animation.replyFadeInMs = 650; }
   if (clean.animation.speedPreset === 'standard') { clean.animation.handwritingFadeMs = 1100; clean.animation.replyFadeInMs = 1000; }
   if (clean.animation.speedPreset === 'slow') { clean.animation.handwritingFadeMs = 1600; clean.animation.replyFadeInMs = 1800; }
-  clean.animation.replyLingerMinMs = clamp(Number(clean.animation.replyLingerMinMs) || 950, 200, 4000);
-  clean.animation.replyLingerMaxMs = clamp(Number(clean.animation.replyLingerMaxMs) || 2200, clean.animation.replyLingerMinMs, 8000);
+  clean.animation.replyLingerMinMs = clamp(Number(clean.animation.replyLingerMinMs) || 5000, 200, 9000);
+  clean.animation.replyLingerMaxMs = clamp(Number(clean.animation.replyLingerMaxMs) || 7000, clean.animation.replyLingerMinMs, 12000);
   clean.animation.replyLingerPerLineMs = clamp(Number(clean.animation.replyLingerPerLineMs) || 260, 0, 1600);
-  clean.animation.replyLineFadeMs = clamp(Number(clean.animation.replyLineFadeMs) || 1450, 500, 3500);
+  clean.animation.replyLineFadeMs = clamp(Number(clean.animation.replyLineFadeMs) || 1800, 500, 5000);
   clean.animation.replyLineDelayMs = clamp(Number(clean.animation.replyLineDelayMs) || 480, 100, 1200);
   clean.animation.wholeFadeLineThreshold = clamp(Number(clean.animation.wholeFadeLineThreshold) || 1, 1, 4);
   clean.input.idlePreset = oneOf(clean.input.idlePreset, ['fast', 'standard', 'slow', 'custom'] as const, 'standard');
@@ -1228,9 +1233,18 @@ function App() {
     ctx.stroke();
   }
 
+  function quillSegments(lines: ReplyLine[]) {
+    return lines.flatMap((line) => (line.quillStrokes || []).map((stroke) => ({ line, stroke, len: strokeLength(stroke) * (line.quillScale || 1) })));
+  }
+
+  function quillAnimationLength(lines: ReplyLine[]) {
+    const all = quillSegments(lines);
+    return Math.max(1, all.reduce((sum, item) => sum + item.len, 0) + Math.max(0, all.length - 1) * 14);
+  }
+
   function drawReplyQuillWriting(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number, settings: Settings) {
-    const all = lines.flatMap((line) => (line.quillStrokes || []).map((stroke) => ({ line, stroke, len: strokeLength(stroke) * (line.quillScale || 1) })));
-    const total = Math.max(1, all.reduce((sum, item) => sum + item.len, 0) + Math.max(0, all.length - 1) * 14);
+    const all = quillSegments(lines);
+    const total = quillAnimationLength(lines);
     let cursor = 0;
     ctx.save();
     ctx.strokeStyle = settings.font.inkColor;
@@ -1365,7 +1379,10 @@ function App() {
     replyLinesRef.current = lines;
 
     const start = performance.now();
-    const duration = settings.animation.replyFadeInMs;
+    const hasQuill = lines.some((line) => line.quillStrokes?.length);
+    const duration = hasQuill
+      ? Math.max(settings.animation.replyFadeInMs, Math.min(7000, quillAnimationLength(lines) / 0.9))
+      : settings.animation.replyFadeInMs;
     const fadeIn = () => {
       if (replyGenerationRef.current !== generation) return;
       const t = clamp((performance.now() - start) / duration, 0, 1);
@@ -1378,8 +1395,7 @@ function App() {
       } else {
         setPhase('lingering');
         setStatus('写完了。你可以继续写。');
-        // Keep the reply readable, but don't let it sit there too long.
-        const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 780 + lines.length * settings.animation.replyLingerPerLineMs));
+        const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 5000 + lines.length * settings.animation.replyLingerPerLineMs));
         replyDelayTimerRef.current = window.setTimeout(() => {
           if (replyGenerationRef.current === generation) fadeReply(generation);
         }, lingerMs);
@@ -1982,10 +1998,10 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           </Field>
           <Field label={`手写消失 ${settings.animation.handwritingFadeMs}ms`}><input type="range" min="450" max="2500" step="50" value={settings.animation.handwritingFadeMs} onChange={(e) => updateSettings((d) => { d.animation.handwritingFadeMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
           <Field label={`回复淡入 ${settings.animation.replyFadeInMs}ms`}><input type="range" min="400" max="4200" step="50" value={settings.animation.replyFadeInMs} onChange={(e) => updateSettings((d) => { d.animation.replyFadeInMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
-          <Field label={`停留最短 ${settings.animation.replyLingerMinMs}ms`}><input type="range" min="200" max="4000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); })} /></Field>
-          <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms`}><input type="range" min="600" max="8000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
+          <Field label={`停留最短 ${settings.animation.replyLingerMinMs}ms`}><input type="range" min="200" max="9000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); })} /></Field>
+          <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms`}><input type="range" min="600" max="12000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
           <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
-          <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms`}><input type="range" min="500" max="3500" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
+          <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
           <Field label={`行间延迟 ${settings.animation.replyLineDelayMs}ms`}><input type="range" min="100" max="1200" step="20" value={settings.animation.replyLineDelayMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineDelayMs = Number(e.target.value); })} /></Field>
           <Field label={`整体淡出阈值 ${settings.animation.wholeFadeLineThreshold} 行`}><input type="range" min="1" max="4" value={settings.animation.wholeFadeLineThreshold} onChange={(e) => updateSettings((d) => { d.animation.wholeFadeLineThreshold = Number(e.target.value); })} /></Field>
         </Section>
