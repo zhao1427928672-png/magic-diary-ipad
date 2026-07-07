@@ -1043,13 +1043,13 @@ function App() {
     ], replyTokenBudget());
   }
 
-  async function generateReplyFromInk(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void) {
+  async function generateReplyFromInk(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, shouldRecordHistory?: () => boolean) {
     const totalStartedAt = performance.now();
     const scribble = scribbleText.trim();
     if (!settings.ai.enabled) {
       const reply = mockReplyForPersona(settings);
       setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, reply, model: 'mock', at: new Date().toISOString() });
-      recordHistoryEntry(scribble || undefined, reply, 'mock');
+      if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble || undefined, reply, 'mock');
       setScribbleText('');
       return reply;
     }
@@ -1058,13 +1058,13 @@ function App() {
       if (settings.ai.recognitionMode !== 'vision' && scribble) {
         const reply = await replyFromRecognizedText(scribble);
         setDebugSample({ imageDataUrl, recognizedText: scribble, reply, model: settings.ai.model, at: new Date().toISOString() });
-        recordHistoryEntry(scribble, reply, settings.ai.model);
+        if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble, reply, settings.ai.model);
         setScribbleText('');
         return reply;
       }
       if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
       const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence);
-      recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
+      if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
       setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
       return reply;
@@ -1097,26 +1097,30 @@ function App() {
     let revealReady = false;
     let replyStarted = false;
     let streamedAny = false;
+    let streamedText = '';
     let replyText: string | null = null;
+    const isCurrentTurn = () => inkGenerationRef.current === inkGeneration;
     const maybeStartReply = () => {
       if (!revealReady || replyText === null) return;
-      if (inkGenerationRef.current === inkGeneration && (replyGenerationRef.current === generation || replyStarted)) {
+      if (isCurrentTurn()) {
         replyStarted = true;
         startReply(replyText);
       }
     };
     window.setTimeout(() => {
-      if (inkGenerationRef.current !== inkGeneration || replyGenerationRef.current !== generation) return;
+      if (!isCurrentTurn()) return;
       revealReady = true;
       setStatus(replyText === null ? '日记正在回信……' : '墨迹开始浮现。');
       maybeStartReply();
     }, Math.min(550, settings.animation.handwritingFadeMs));
     void generateReplyFromInk(imageDataUrl, async (sentence) => {
-      if (inkGenerationRef.current !== inkGeneration) return;
+      if (!isCurrentTurn()) return;
       streamedAny = true;
-      replyText = sentence;
+      streamedText = `${streamedText}${streamedText ? '\n' : ''}${sentence}`;
+      replyText = streamedText;
       maybeStartReply();
-    }).then((reply) => {
+    }, isCurrentTurn).then((reply) => {
+      if (!isCurrentTurn()) return;
       if (!streamedAny) {
         replyText = reply;
         maybeStartReply();

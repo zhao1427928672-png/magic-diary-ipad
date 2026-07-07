@@ -24,9 +24,14 @@ async function readJson(request) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function withCors(response) {
+function withCors(response, stream = false) {
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(CORS_HEADERS)) headers.set(key, value);
+  if (stream) {
+    headers.set('Cache-Control', 'no-cache, no-transform');
+    if (!headers.get('Content-Type')) headers.set('Content-Type', 'text/event-stream; charset=utf-8');
+    headers.set('X-Accel-Buffering', 'no');
+  }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -49,7 +54,7 @@ async function handleChat(request, stream) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(stream ? { ...payload, stream: true } : payload),
   });
-  return withCors(upstream);
+  return withCors(upstream, stream);
 }
 
 export default {
