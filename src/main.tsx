@@ -739,10 +739,27 @@ function App() {
     }
   }
 
+  function isHostedOnGithubPages() {
+    return window.location.hostname.endsWith('github.io');
+  }
+
   function aiProxyUrl(path: string) {
     const endpoint = path.startsWith('/') ? path : `/${path}`;
-    if (window.location.hostname.endsWith('github.io')) return `https://magic-diary-ai-proxy.zook1464288932.workers.dev${endpoint}`;
+    if (isHostedOnGithubPages()) return `https://magic-diary-ai-proxy.zook1464288932.workers.dev${endpoint}`;
     return `/api/ai-proxy${endpoint}`;
+  }
+
+  async function fetchWithRetry(url: string, init: RequestInit, attempts = 2) {
+    let lastError: unknown;
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        return await fetch(url, init);
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => window.setTimeout(resolve, 350));
+      }
+    }
+    throw lastError;
   }
 
   function providerUrl(path: string) {
@@ -757,7 +774,7 @@ function App() {
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetch(aiProxyUrl('chat'), {
+      let res = await fetchWithRetry(aiProxyUrl('chat'), {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -776,7 +793,10 @@ function App() {
       const text = String(data?.choices?.[0]?.message?.content || '').trim();
       return cleanDiaryReply(text) || text;
     } catch (error) {
-      if (error instanceof TypeError) throw new Error('AI 请求失败：浏览器无法直连该接口，可能是服务商 CORS 限制。需要换支持浏览器直连的 Base URL，或接一个线上代理。');
+      if (error instanceof TypeError) {
+        if (isHostedOnGithubPages()) throw new Error('AI 请求失败：线上代理暂时访问失败。请刷新页面重试；如果持续失败，可能是网络无法访问 Cloudflare Worker。');
+        throw new Error('AI 请求失败：浏览器无法直连该接口，可能是服务商 CORS 限制。需要换支持浏览器直连的 Base URL，或接一个线上代理。');
+      }
       throw error;
     } finally {
       window.clearTimeout(timeout);
@@ -794,7 +814,7 @@ function App() {
     };
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetch(aiProxyUrl('chat-stream'), {
+      let res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -1336,7 +1356,7 @@ function App() {
   async function loadModelOptions() {
     try {
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
-      let res = await fetch(aiProxyUrl('models'), {
+      let res = await fetchWithRetry(aiProxyUrl('models'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey }),
