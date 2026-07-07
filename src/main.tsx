@@ -76,6 +76,7 @@ type Settings = {
     idleCommitMs: number;
     onWriteDuringReply: 'clear-immediately' | 'fade-out' | 'keep';
     strikeTargets: Array<'user-ink' | 'ai-reply'>;
+    allowTouchWriting: boolean;
     touchPressure: number;
     penBaseWidth: number;
   };
@@ -175,6 +176,7 @@ function createDefaultSettings(): Settings {
     idleCommitMs: 900,
     onWriteDuringReply: 'fade-out',
     strikeTargets: [],
+    allowTouchWriting: true,
     touchPressure: 0.85,
     penBaseWidth: 1.8,
   },
@@ -283,6 +285,7 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.input.strikeTargets = Array.isArray(clean.input.strikeTargets)
     ? clean.input.strikeTargets.filter((target): target is 'user-ink' | 'ai-reply' => target === 'user-ink' || target === 'ai-reply')
     : defaults.input.strikeTargets;
+  clean.input.allowTouchWriting = Boolean(clean.input.allowTouchWriting);
   clean.input.touchPressure = clamp(Number(clean.input.touchPressure) || 0.85, 0.3, 1);
   clean.input.penBaseWidth = clamp(Number(clean.input.penBaseWidth) || 1.8, 1, 4);
   clean.paper.fit = oneOf(clean.paper.fit, ['cover', 'contain', 'repeat', 'stretch'] as const, 'cover');
@@ -550,6 +553,7 @@ function App() {
   const sizeRef = useRef({ w: 0, h: 0 });
   const strokesRef = useRef<Stroke[]>([]);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
   const strikeCandidateRef = useRef<StrikeCandidate | null>(null);
   const lastInputBoxRef = useRef<BBox | null>(null);
@@ -577,6 +581,13 @@ function App() {
       // Private mode or storage quota errors should not break the diary surface.
     }
   }, [settings]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void document.fonts?.load('24px "DiaryHandwritingFull"').catch(() => undefined);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     try {
@@ -1238,9 +1249,17 @@ function App() {
     const ctxs = ctxsRef.current;
     if (!canvas || !ctxs) return;
 
+    const shouldAcceptPointer = (event: PointerEvent) => {
+      if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) return false;
+      if (event.pointerType === 'touch' && !settings.input.allowTouchWriting) return false;
+      if (event.pointerType === 'touch' && event.isPrimary === false) return false;
+      return true;
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       event.preventDefault();
-      if (event.pointerType === 'touch' && event.isPrimary === false) return;
+      if (!shouldAcceptPointer(event)) return;
+      activePointerIdRef.current = event.pointerId;
       clearIdleTimer();
       ++inkGenerationRef.current;
       clearInkTimers();
@@ -1266,6 +1285,7 @@ function App() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== activePointerIdRef.current) return;
       const stroke = currentStrokeRef.current;
       if (!stroke) return;
       event.preventDefault();
@@ -1280,10 +1300,12 @@ function App() {
     };
 
     const finish = (event: PointerEvent, shouldCommit: boolean) => {
+      if (event.pointerId !== activePointerIdRef.current) return;
       const stroke = currentStrokeRef.current;
       if (!stroke) return;
       event.preventDefault();
       currentStrokeRef.current = null;
+      activePointerIdRef.current = null;
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
@@ -1752,6 +1774,10 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
             <label><input type="checkbox" checked={settings.input.strikeTargets.includes('user-ink')} onChange={(e) => updateSettings((d) => { d.input.strikeTargets = e.target.checked ? Array.from(new Set([...d.input.strikeTargets, 'user-ink'])) : d.input.strikeTargets.filter((v) => v !== 'user-ink'); })} /> 划掉用户字迹</label>
             <label><input type="checkbox" checked={settings.input.strikeTargets.includes('ai-reply')} onChange={(e) => updateSettings((d) => { d.input.strikeTargets = e.target.checked ? Array.from(new Set([...d.input.strikeTargets, 'ai-reply'])) : d.input.strikeTargets.filter((v) => v !== 'ai-reply'); })} /> 划掉 AI 回信</label>
           </div>
+          <div className="check-row">
+            <label><input type="checkbox" checked={settings.input.allowTouchWriting} onChange={(e) => updateSettings((d) => { d.input.allowTouchWriting = e.target.checked; })} /> 允许手指书写</label>
+          </div>
+          <p className="hint-text">关闭后会忽略手指/手掌触摸，只接受 Apple Pencil 或触控笔。</p>
           <Field label={`手指压力 ${settings.input.touchPressure.toFixed(2)}`}><input type="range" min="0.3" max="1" step="0.05" value={settings.input.touchPressure} onChange={(e) => updateSettings((d) => { d.input.touchPressure = Number(e.target.value); })} /></Field>
           <Field label={`基础笔宽 ${settings.input.penBaseWidth.toFixed(1)}`}><input type="range" min="1" max="4" step="0.1" value={settings.input.penBaseWidth} onChange={(e) => updateSettings((d) => { d.input.penBaseWidth = Number(e.target.value); })} /></Field>
         </Section>
