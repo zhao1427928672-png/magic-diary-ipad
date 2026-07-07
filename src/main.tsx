@@ -300,7 +300,7 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.paper.contrast = clamp(Number(clean.paper.contrast) || 1, 0.6, 1.6);
   clean.paper.vignette = clamp(Number(clean.paper.vignette) || 0, 0, 0.7);
   clean.reply.positionMode = oneOf(clean.reply.positionMode, ['auto', 'fixed-center', 'follow-writing'] as const, 'auto');
-  clean.persona.presetId = oneOf(clean.persona.presetId, ['old-paper-reply', 'riddle-diary', 'quiet-friend', 'calm-mentor', 'cultivation-note', 'dream-oracle', 'custom'] as const, 'old-paper-reply');
+  clean.persona.presetId = oneOf(clean.persona.presetId, ['none', 'old-paper-reply', 'riddle-diary', 'quiet-friend', 'calm-mentor', 'cultivation-note', 'dream-oracle', 'custom'] as const, 'old-paper-reply');
   clean.persona.replyLength = oneOf(clean.persona.replyLength, ['very-short', 'short', 'standard', 'detailed'] as const, 'short');
   clean.persona.replyMode = oneOf(clean.persona.replyMode, ['reflective', 'answer', 'coach', 'oracle', 'companion'] as const, 'reflective');
   clean.persona.tone = oneOf(clean.persona.tone, ['calm', 'warm', 'mysterious', 'direct', 'encouraging'] as const, 'warm');
@@ -513,6 +513,7 @@ function cleanDiaryReply(reply: string) {
 }
 
 function mockReplyForPersona(settings: Settings) {
+  if (settings.persona.presetId === 'none') return '我会直接回答你写下的内容。';
   if (settings.persona.presetId === 'riddle-diary') return '我是留在这本日记里的一个名字。先写下你的名字，我会告诉你我知道什么。';
   if (settings.persona.presetId === 'quiet-friend') return '我听见了。先不用急着解释，能写下来就已经往前走了一步。';
   if (settings.persona.presetId === 'calm-mentor') return '先做最小的一步验证。把下一步写清楚，再决定要不要继续。';
@@ -521,6 +522,9 @@ function mockReplyForPersona(settings: Settings) {
 }
 
 function personaPrompt(settings: Settings) {
+  if (settings.persona.presetId === 'none') {
+    return '你是一个普通、直接的助手。直接根据用户写下的内容回答，不套任何角色、人设或魔法日记口吻。不要提到 OCR、图片、上传或识别过程。不要编造用户没有写下的事实。';
+  }
   const preset = settings.persona.presetId === 'quiet-friend' ? '你像一位安静可靠的朋友，少说教，多陪伴。'
     : settings.persona.presetId === 'calm-mentor' ? '你像一位冷静导师，直接、清楚，给出可执行的下一步。'
     : settings.persona.presetId === 'cultivation-note' ? '你以修行札记的口吻回应，稳重谨慎，区分事实、感受与建议。'
@@ -975,7 +979,9 @@ function App() {
       const messages = [
         { role: 'system', content: personaPrompt(settings) },
         { role: 'user', content: [
-          { type: 'text', text: '读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。只输出日记本身浮现出的短回信，每一句都尽快用句号或问号结束。' },
+          { type: 'text', text: settings.persona.presetId === 'none'
+            ? '读懂图片里的手写内容后，直接回答用户写下的内容。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。每一句都尽快用句号或问号结束。'
+            : '读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。只输出日记本身浮现出的短回信，每一句都尽快用句号或问号结束。' },
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
       ];
@@ -1888,6 +1894,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
         <Section id="persona" title="AI 人格 / 回信风格" settings={settings} toggleSection={toggleSection}>
           <Field label="人格预设">
             <select value={settings.persona.presetId} onChange={(e) => updateSettings((d) => { d.persona.presetId = e.target.value; if (e.target.value === 'riddle-diary') { d.persona.replyLength = 'very-short'; d.persona.replyMode = 'oracle'; d.persona.tone = 'mysterious'; } })}>
+              <option value="none">无：直接 AI 回复</option>
               <option value="old-paper-reply">旧纸回信</option>
               <option value="riddle-diary">里德尔式魔法日记</option>
               <option value="quiet-friend">安静朋友</option>
