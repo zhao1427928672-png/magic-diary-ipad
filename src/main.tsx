@@ -739,6 +739,11 @@ function App() {
     }
   }
 
+  function providerUrl(path: string) {
+    const base = settings.ai.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+    return `${base}/v1/${path.replace(/^\/+/, '')}`;
+  }
+
   async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
     if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
@@ -746,16 +751,27 @@ function App() {
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      const res = await fetch('/api/ai-proxy/chat', {
+      let res = await fetch('/api/ai-proxy/chat', {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
       });
+      if (res.status === 404 || res.status === 405) {
+        res = await fetch(providerUrl('chat/completions'), {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.ai.apiKey}` },
+          body: JSON.stringify(payload),
+        });
+      }
       if (!res.ok) throw new Error(`AI 请求失败：HTTP ${res.status} ${await res.text()}`);
       const data = await res.json();
       const text = String(data?.choices?.[0]?.message?.content || '').trim();
       return cleanDiaryReply(text) || text;
+    } catch (error) {
+      if (error instanceof TypeError) throw new Error('AI 请求失败：浏览器无法直连该接口，可能是服务商 CORS 限制。需要换支持浏览器直连的 Base URL，或接一个线上代理。');
+      throw error;
     } finally {
       window.clearTimeout(timeout);
     }
@@ -772,12 +788,20 @@ function App() {
     };
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      const res = await fetch('/api/ai-proxy/chat-stream', {
+      let res = await fetch('/api/ai-proxy/chat-stream', {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
       });
+      if (res.status === 404 || res.status === 405) {
+        res = await fetch(providerUrl('chat/completions'), {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.ai.apiKey}` },
+          body: JSON.stringify({ ...payload, stream: true }),
+        });
+      }
       if (!res.ok || !res.body) return await postChatCompletion(model, messages, maxTokens);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -811,6 +835,9 @@ function App() {
       }
       const cleaned = cleanDiaryReply(acc.trim());
       return cleaned || acc.trim() || await postChatCompletion(model, messages, maxTokens);
+    } catch (error) {
+      if (error instanceof TypeError) return await postChatCompletion(model, messages, maxTokens);
+      throw error;
     } finally {
       window.clearTimeout(timeout);
     }
@@ -1303,11 +1330,17 @@ function App() {
   async function loadModelOptions() {
     try {
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
-      const res = await fetch('/api/ai-proxy/models', {
+      let res = await fetch('/api/ai-proxy/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey }),
       });
+      if (res.status === 404 || res.status === 405) {
+        res = await fetch(providerUrl('models'), {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${settings.ai.apiKey}` },
+        });
+      }
       if (!res.ok) throw new Error(`模型列表读取失败：HTTP ${res.status}`);
       const data = await res.json();
       const ids = (data?.data || []).map((m: any) => String(m.id || '')).filter(Boolean).sort();
@@ -1315,7 +1348,9 @@ function App() {
       try { localStorage.setItem(modelOptionsCacheKey(settings.ai.baseUrl), JSON.stringify(ids)); } catch { /* ignore */ }
       setStatus(ids.length ? `已读取 ${ids.length} 个模型。` : '接口返回了模型列表，但没有可用模型名。');
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = error instanceof TypeError
+        ? '浏览器无法直连该接口，可能是服务商 CORS 限制；需要换支持浏览器直连的 Base URL，或接线上代理。'
+        : error instanceof Error ? error.message : String(error);
       setModelOptions([]);
       setStatus(`读取模型失败：${message.slice(0, 80)}`);
     }
