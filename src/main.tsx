@@ -739,6 +739,12 @@ function App() {
     }
   }
 
+  function aiProxyUrl(path: string) {
+    const endpoint = path.startsWith('/') ? path : `/${path}`;
+    if (window.location.hostname.endsWith('github.io')) return `https://magic-diary-ai-proxy.zook1464288932.workers.dev${endpoint}`;
+    return `/api/ai-proxy${endpoint}`;
+  }
+
   function providerUrl(path: string) {
     const base = settings.ai.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
     return `${base}/v1/${path.replace(/^\/+/, '')}`;
@@ -751,7 +757,7 @@ function App() {
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetch('/api/ai-proxy/chat', {
+      let res = await fetch(aiProxyUrl('chat'), {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -788,7 +794,7 @@ function App() {
     };
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetch('/api/ai-proxy/chat-stream', {
+      let res = await fetch(aiProxyUrl('chat-stream'), {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -1330,7 +1336,7 @@ function App() {
   async function loadModelOptions() {
     try {
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
-      let res = await fetch('/api/ai-proxy/models', {
+      let res = await fetch(aiProxyUrl('models'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey }),

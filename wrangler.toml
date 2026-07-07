@@ -1,0 +1,4 @@
+name = "magic-diary-ai-proxy"
+main = "worker/magic-diary-ai-proxy.js"
+compatibility_date = "2026-07-07"
+workers_dev = true
