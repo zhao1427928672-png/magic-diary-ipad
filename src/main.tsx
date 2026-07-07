@@ -1412,18 +1412,19 @@ function App() {
         onPointerLeave={cancelStatusLongPress}
       >
         <span className="dot" />
-        {status}
+        <span className="status-text">{status}</span>
+        <button
+          className="settings-trigger"
+          type="button"
+          aria-label="打开设置"
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerUp={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            setSettingsOpen(true);
+          }}
+        >⚙</button>
       </section>
-      <button
-        className="settings-trigger"
-        type="button"
-        aria-label="打开设置"
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          setSettingsOpen(true);
-        }}
-      >⚙</button>
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
