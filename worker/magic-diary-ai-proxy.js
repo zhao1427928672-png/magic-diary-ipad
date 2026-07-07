@@ -63,7 +63,8 @@ export default {
       if (url.pathname.endsWith('/models')) return await handleModels(request);
       if (url.pathname.endsWith('/chat-stream')) return await handleChat(request, true);
       if (url.pathname.endsWith('/chat')) return await handleChat(request, false);
-      return env.ASSETS.fetch(request);
+      if (env && env.ASSETS) return env.ASSETS.fetch(request);
+      return json(404, { error: '静态资源绑定不可用。' });
     } catch (error) {
       return json(500, { error: error instanceof Error ? error.message : String(error) });
     }
