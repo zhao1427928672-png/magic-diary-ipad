@@ -824,6 +824,73 @@ function App() {
     }
   }
 
+  function extractSentencesFromBuffer(bufferText: string) {
+    const out: string[] = [];
+    let rest = bufferText;
+    while (true) {
+      const match = rest.match(/^(.{1,}?[。！？!?…\n])/s);
+      if (!match) break;
+      const sentence = match[1].trim();
+      if (sentence) out.push(sentence);
+      rest = rest.slice(match[1].length);
+    }
+    return { sentences: out, rest };
+  }
+
+  async function postChatCompletionStreamSentences(model: string, messages: unknown[], onSentence: (sentence: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens) {
+    if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
+    if (!model.trim()) throw new Error('还没有填写模型名。');
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
+    const requestStartedAt = performance.now();
+    let collected = '';
+    let sentenceBuffer = '';
+    let sawFirstChunk = false;
+    try {
+      const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
+      const res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
+        method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
+      });
+      if (!res.ok || !res.body) return await postChatCompletionFirstSentence(model, messages, maxTokens);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split(/\r?\n/);
+        sseBuffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          try {
+            const json = JSON.parse(data);
+            const frag = json?.choices?.[0]?.delta?.content || '';
+            if (!frag) continue;
+            if (!sawFirstChunk) {
+              sawFirstChunk = true;
+              setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstChunkMs: Math.round(performance.now() - requestStartedAt), replyStreamingQueue: 'yes' } }));
+            }
+            collected += frag;
+            sentenceBuffer += frag;
+            const split = extractSentencesFromBuffer(sentenceBuffer);
+            sentenceBuffer = split.rest;
+            for (const sentence of split.sentences) await onSentence(cleanDiaryReply(sentence) || sentence);
+          } catch { /* ignore malformed chunks */ }
+        }
+      }
+      const rest = cleanDiaryReply(sentenceBuffer.trim()) || sentenceBuffer.trim();
+      if (rest) await onSentence(rest);
+      return cleanDiaryReply(collected.trim()) || collected.trim();
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   async function postChatCompletionFirstSentence(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
     if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
@@ -900,18 +967,21 @@ function App() {
     }
   }
 
-  async function callOpenAICompatible(imageDataUrl: string) {
+  async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void) {
     const visionModel = settings.ai.modelMode === 'split' ? (settings.ai.visionModel || settings.ai.model) : settings.ai.model;
     const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
     if (settings.ai.replyPipeline === 'fast-single') {
       setDebugSample((sample) => ({ ...(sample || {}), model: replyModel, at: new Date().toISOString() }));
-      return await postChatCompletionFirstSentence(replyModel, [
+      const messages = [
         { role: 'system', content: personaPrompt(settings) },
         { role: 'user', content: [
-          { type: 'text', text: '读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。只输出日记本身浮现出的短回信。' },
+          { type: 'text', text: '读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。只输出日记本身浮现出的短回信，每一句都尽快用句号或问号结束。' },
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
-      ], Math.min(settings.ai.maxTokens, 260));
+      ];
+      return onSentence
+        ? await postChatCompletionStreamSentences(replyModel, messages, onSentence, Math.min(settings.ai.maxTokens, 260))
+        : await postChatCompletionFirstSentence(replyModel, messages, Math.min(settings.ai.maxTokens, 260));
     }
     const recognizedText = await postChatCompletion(visionModel, [
       { role: 'system', content: '你是严格的手写 OCR。只识别图片中的真实手写内容。不要解释，不要回答问题，不要发挥；看不清就输出“看不清”。' },
@@ -936,7 +1006,7 @@ function App() {
     ]);
   }
 
-  async function generateReplyFromInk(imageDataUrl: string) {
+  async function generateReplyFromInk(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void) {
     const totalStartedAt = performance.now();
     const scribble = scribbleText.trim();
     if (!settings.ai.enabled) {
@@ -954,7 +1024,7 @@ function App() {
         return reply;
       }
       if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
-      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl);
+      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence);
       setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
       return reply;
@@ -986,10 +1056,11 @@ function App() {
     clearReplyTimers();
     let revealReady = false;
     let replyStarted = false;
+    let streamedAny = false;
     let replyText: string | null = null;
     const maybeStartReply = () => {
-      if (!revealReady || replyText === null || replyStarted) return;
-      if (inkGenerationRef.current === inkGeneration && replyGenerationRef.current === generation) {
+      if (!revealReady || replyText === null) return;
+      if (inkGenerationRef.current === inkGeneration && (replyGenerationRef.current === generation || replyStarted)) {
         replyStarted = true;
         startReply(replyText);
       }
@@ -1000,9 +1071,16 @@ function App() {
       setStatus(replyText === null ? '日记正在回信……' : '墨迹开始浮现。');
       maybeStartReply();
     }, Math.min(550, settings.animation.handwritingFadeMs));
-    void generateReplyFromInk(imageDataUrl).then((reply) => {
-      replyText = reply;
+    void generateReplyFromInk(imageDataUrl, async (sentence) => {
+      if (inkGenerationRef.current !== inkGeneration) return;
+      streamedAny = true;
+      replyText = sentence;
       maybeStartReply();
+    }).then((reply) => {
+      if (!streamedAny) {
+        replyText = reply;
+        maybeStartReply();
+      }
     });
 
     const start = performance.now();
