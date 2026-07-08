@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
 import { addHistoryEntry, clearHistory, loadHistory, type HistoryEntry } from './historyStore';
+import { clearDiagnostics, loadDiagnostics, pushDiagnosticEvent, setDiagnosticsEnabled, setLastDiagnosticError, type DiagnosticsState } from './diagnosticsStore';
 import { strokesForText, type InkStroke } from './scriptInk';
 import './styles.css';
 
@@ -106,6 +107,9 @@ type Settings = {
 
 const SETTINGS_KEY = 'magic-diary-settings-v1';
 const PRESETS_KEY = 'magic-diary-presets-v1';
+function loadDiagnosticsState() {
+  return loadDiagnostics();
+}
 const MODEL_OPTIONS_KEY = 'magic-diary-model-options-v1';
 function modelOptionsCacheKey(baseUrl: string) {
   return `${MODEL_OPTIONS_KEY}:${(baseUrl || '').trim().replace(/\/+$/, '') || 'default'}`;
@@ -601,7 +605,9 @@ function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugSample, setDebugSample] = useState<DebugSample | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsState>(() => loadDiagnosticsState());
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => loadHistory());
+  const diagnosticsEnabledRef = useRef(diagnostics.enabled);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [scribbleText, setScribbleText] = useState('');
   const longPressTimerRef = useRef<number | null>(null);
@@ -613,12 +619,83 @@ function App() {
   const thinkingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    diagnosticsEnabledRef.current = diagnostics.enabled;
+  }, [diagnostics.enabled]);
+
+  function refreshDiagnostics() {
+    setDiagnostics(loadDiagnosticsState());
+  }
+
+  function logDiagnosticEvent(kind: string, detail: string) {
+    if (!diagnosticsEnabledRef.current) return;
+    pushDiagnosticEvent({ kind, detail });
+    refreshDiagnostics();
+  }
+
+  function clearDiagnosticLogs() {
+    clearDiagnostics();
+    refreshDiagnostics();
+    setStatus('诊断信息已清空。');
+  }
+
+  async function copyDiagnosticsJson() {
+    const payload = JSON.stringify({
+      diagnostics,
+      debugSample,
+      settings: {
+        recognitionMode: settings.ai.recognitionMode,
+        replyPipeline: settings.ai.replyPipeline,
+        model: settings.ai.model,
+        visionModel: settings.ai.visionModel,
+        replyModel: settings.ai.replyModel,
+        persona: settings.persona.presetId,
+        replyLength: settings.persona.replyLength,
+        animation: settings.animation,
+      },
+      runtime: {
+        phase,
+        status,
+        url: window.location.href,
+        ua: navigator.userAgent,
+        viewport: { width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio || 1 },
+      },
+    }, null, 2);
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      await navigator.clipboard.writeText(payload);
+      setStatus('诊断信息已复制。');
     } catch {
-      // Private mode or storage quota errors should not break the diary surface.
+      window.prompt('复制这段诊断信息', payload);
     }
-  }, [settings]);
+  }
+
+  useEffect(() => {
+    if (!diagnostics.enabled) return;
+    const onError = (event: ErrorEvent) => {
+      setLastDiagnosticError(event.message || '未知脚本错误');
+      pushDiagnosticEvent({ kind: 'error', detail: `${event.message || '未知错误'} @ ${event.filename || 'inline'}:${event.lineno || 0}` });
+      refreshDiagnostics();
+    };
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const message = event.reason instanceof Error ? event.reason.message : String(event.reason);
+      setLastDiagnosticError(message || '未知 Promise 异常');
+      pushDiagnosticEvent({ kind: 'promise', detail: message || '未知 Promise 异常' });
+      refreshDiagnostics();
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandled);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandled);
+    };
+  }, [diagnostics.enabled]);
+
+  useEffect(() => {
+    if (diagnostics.enabled) logDiagnosticEvent('app', 'diagnostics enabled');
+  }, [diagnostics.enabled]);
+
+  useEffect(() => {
+    logDiagnosticEvent('phase', `${phase} | ${status}`);
+  }, [phase, status]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1897,6 +1974,10 @@ function App() {
           testLastCropRecognition={testLastCropRecognition}
           testPersonaReply={testPersonaReply}
           debugSample={debugSample}
+          diagnostics={diagnostics}
+          setDiagnosticsEnabled={(enabled) => { setDiagnosticsEnabled(enabled); refreshDiagnostics(); }}
+          copyDiagnosticsJson={copyDiagnosticsJson}
+          clearDiagnosticLogs={clearDiagnosticLogs}
           historyEntries={historyEntries}
           clearConversationHistory={clearConversationHistory}
           onClose={() => setSettingsOpen(false)}
@@ -1940,7 +2021,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, historyEntries, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; historyEntries: HistoryEntry[]; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -2099,6 +2180,20 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
               ))}
             </div>
           )}
+        </Section>
+
+        <Section id="diagnostics" title={`诊断模式${diagnostics.enabled ? '（已开启）' : ''}`} settings={settings} toggleSection={toggleSection}>
+          <div className="check-row">
+            <label><input type="checkbox" checked={diagnostics.enabled} onChange={(e) => setDiagnosticsEnabled(e.target.checked)} /> 开启诊断模式</label>
+          </div>
+          <p className="hint-text">开启后会记录最近错误、Promise 异常、阶段切换等关键事件，方便排查黑屏、回信异常、OCR 失败。不保存 API Key。</p>
+          <div className="settings-actions inline-actions">
+            <button type="button" onClick={copyDiagnosticsJson}>复制诊断信息</button>
+            <button type="button" onClick={clearDiagnosticLogs}>清空诊断</button>
+          </div>
+          <div className="debug-sample">
+            <pre className="debug-box">{JSON.stringify({ 已开启: diagnostics.enabled, 最近错误: diagnostics.lastError, 最近事件: diagnostics.events.slice(-12) }, null, 2)}</pre>
+          </div>
         </Section>
 
         <Section id="font" title="字体与文字" settings={settings} toggleSection={toggleSection}>
