@@ -2108,8 +2108,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms（长回复最多停多久）`}><input type="range" min="600" max="12000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
           <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms（回信每多一行额外多停一会）`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
           <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms（每个字自己淡掉的时长）`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
-          <Field label={`行间延迟 ${settings.animation.replyLineDelayMs}ms（旧参数，当前逐字淡出影响很弱）`}><input type="range" min="100" max="1200" step="20" value={settings.animation.replyLineDelayMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineDelayMs = Number(e.target.value); })} /></Field>
-          <Field label={`整体淡出阈值 ${settings.animation.wholeFadeLineThreshold} 行（旧参数，当前主要保留兼容）`}><input type="range" min="1" max="4" value={settings.animation.wholeFadeLineThreshold} onChange={(e) => updateSettings((d) => { d.animation.wholeFadeLineThreshold = Number(e.target.value); })} /></Field>
+          <p className="hint-text">已隐藏旧的兼容参数（例如行间延迟、整体淡出阈值）。当前主要就是上面这 5 个参数在决定你实际看到的效果。</p>
         </Section>
 
         <Section id="input" title="手写输入" settings={settings} toggleSection={toggleSection}>
