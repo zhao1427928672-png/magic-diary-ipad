@@ -553,6 +553,18 @@ function personaPrompt(settings: Settings) {
   return `你必须严格遵守下面的人格与回信规则，优先级高于普通回答习惯。\n${preset}\n${length}\n${mode}\n${tone}\n禁止事项：${settings.persona.negativePrompt}${custom}\n不要提到 AI、模型、OCR、图片、上传或识别过程；只像纸页读到了墨迹。不要编造用户没有写下的事实。`;
 }
 
+function normalizeRecognizedText(recognizedText: string) {
+  return recognizedText
+    .replace(/[（(]?(?:个别|部分|少量)?(?:字词|字|词)?看不清[）)]?/g, '[看不清]')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasEnoughRecognizedText(recognizedText: string) {
+  const normalized = normalizeRecognizedText(recognizedText).replace(/\[看不清\]/g, '').replace(/[\s\p{P}]/gu, '');
+  return normalized.length >= 2;
+}
+
 function App() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const paperRef = useRef<HTMLCanvasElement | null>(null);
@@ -1021,17 +1033,18 @@ function App() {
         : await postChatCompletionFirstSentence(replyModel, messages, replyTokenBudget());
     }
     const recognizedText = await postChatCompletion(visionModel, [
-      { role: 'system', content: '你是严格的手写 OCR。只识别图片中的真实手写内容。不要解释，不要回答问题，不要发挥；看不清就输出“看不清”。' },
+      { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留，不要解释，不要回答问题，不要发挥。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
       { role: 'user', content: [
-        { type: 'text', text: '请逐字转写图片里的手写中文。只输出手写原文。' },
+        { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。除手写原文外不要输出别的。' },
         dataUrlToOpenAIImage(imageDataUrl),
       ] },
     ], 260);
-    setDebugSample((sample) => ({ ...(sample || {}), recognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
-    if (!recognizedText || recognizedText.includes('看不清')) return '我看见墨迹了，但这次没有读清。你可以写大一点，或者把字间距留开些。';
+    const normalizedRecognizedText = normalizeRecognizedText(recognizedText);
+    setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
+    if (!normalizedRecognizedText || normalizedRecognizedText === '看不清' || !hasEnoughRecognizedText(normalizedRecognizedText)) return '我看见墨迹了，但这次只辨认出零散几个字，还不够稳。你可以写大一点，或者把字间距留开些。';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
-      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
+      { role: 'user', content: `用户刚刚在日记纸上写下：\n${normalizedRecognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。` }
     ], replyTokenBudget());
   }
 
@@ -1740,13 +1753,13 @@ function App() {
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
       const model = settings.ai.modelMode === 'split' ? (settings.ai.visionModel || settings.ai.model) : settings.ai.model;
       const recognizedText = await postChatCompletion(model, [
-        { role: 'system', content: '你是严格的手写 OCR。只识别图片中的真实手写内容。不要解释，不要回答问题，不要发挥；看不清就输出“看不清”。' },
+        { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
         { role: 'user', content: [
-          { type: 'text', text: '请逐字转写图片里的手写中文。只输出手写原文。' },
+          { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。除手写原文外不要输出别的。' },
           dataUrlToOpenAIImage(debugSample.imageDataUrl),
         ] },
       ], 260);
-      setDebugSample((sample) => ({ ...(sample || {}), recognizedText, model, at: new Date().toISOString() }));
+      setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizeRecognizedText(recognizedText), model, at: new Date().toISOString() }));
       setStatus('最近一次裁剪图识别完成。');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
