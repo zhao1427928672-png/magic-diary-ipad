@@ -786,7 +786,7 @@ function App() {
 
   function aiProxyUrl(path: string) {
     const endpoint = path.startsWith('/') ? path : `/${path}`;
-    if (isHostedOnGithubPages()) return `https://magic-diary-ai-proxy.zook1464288932.workers.dev${endpoint}`;
+    if (isHostedOnGithubPages()) return `https://magic.zackbiu.ccwu.cc${endpoint}`;
     return `/api/ai-proxy${endpoint}`;
   }
 
