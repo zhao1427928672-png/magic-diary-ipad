@@ -1484,7 +1484,7 @@ function App() {
           ctxs.reply.save();
           ctxs.reply.globalAlpha = alpha;
           ctxs.reply.beginPath();
-          ctxs.reply.rect(line.x + left - 4, line.y - padY, right - left + 16, lineBox.h);
+          ctxs.reply.rect(line.x + left - 4, line.y - padY - 4, right - left + 16, lineBox.h + 20);
           ctxs.reply.clip();
           ctxs.reply.drawImage(snapshot, 0, 0, w, h);
           ctxs.reply.restore();
@@ -2083,19 +2083,20 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
         </Section>
 
         <Section id="animation" title="动画效果" settings={settings} toggleSection={toggleSection}>
+          <p className="hint-text">这里主要控制三段：用户手写墨迹怎么退场、AI 回信怎么写出来、AI 回信停留多久后再淡掉。最近为了接近官方效果，部分动画会按笔画长度自动延长，所以不是每个滑轨都线性生效。</p>
           <Field label="动画速度">
             <select value={settings.animation.speedPreset} onChange={(e) => updateSettings((d) => { const v = e.target.value as Settings['animation']['speedPreset']; d.animation.speedPreset = v; if (v === 'fast') { d.animation.handwritingFadeMs = 800; d.animation.replyFadeInMs = 650; } else if (v === 'standard') { d.animation.handwritingFadeMs = 1100; d.animation.replyFadeInMs = 1000; } else if (v === 'slow') { d.animation.handwritingFadeMs = 1600; d.animation.replyFadeInMs = 1800; } })}>
               <option value="fast">快</option><option value="standard">标准</option><option value="slow">慢</option><option value="custom">自定义</option>
             </select>
           </Field>
-          <Field label={`手写消失 ${settings.animation.handwritingFadeMs}ms`}><input type="range" min="450" max="2500" step="50" value={settings.animation.handwritingFadeMs} onChange={(e) => updateSettings((d) => { d.animation.handwritingFadeMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
-          <Field label={`回复淡入 ${settings.animation.replyFadeInMs}ms`}><input type="range" min="400" max="4200" step="50" value={settings.animation.replyFadeInMs} onChange={(e) => updateSettings((d) => { d.animation.replyFadeInMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
-          <Field label={`停留最短 ${settings.animation.replyLingerMinMs}ms`}><input type="range" min="200" max="9000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); })} /></Field>
-          <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms`}><input type="range" min="600" max="12000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
-          <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
-          <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
-          <Field label={`行间延迟 ${settings.animation.replyLineDelayMs}ms`}><input type="range" min="100" max="1200" step="20" value={settings.animation.replyLineDelayMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineDelayMs = Number(e.target.value); })} /></Field>
-          <Field label={`整体淡出阈值 ${settings.animation.wholeFadeLineThreshold} 行`}><input type="range" min="1" max="4" value={settings.animation.wholeFadeLineThreshold} onChange={(e) => updateSettings((d) => { d.animation.wholeFadeLineThreshold = Number(e.target.value); })} /></Field>
+          <Field label={`手写消失 ${settings.animation.handwritingFadeMs}ms（用户写的墨迹被纸吸走的速度）`}><input type="range" min="450" max="2500" step="50" value={settings.animation.handwritingFadeMs} onChange={(e) => updateSettings((d) => { d.animation.handwritingFadeMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
+          <Field label={`回复淡入 ${settings.animation.replyFadeInMs}ms（AI 回信开始写出的最短时长；长句会按笔画自动更久）`}><input type="range" min="400" max="4200" step="50" value={settings.animation.replyFadeInMs} onChange={(e) => updateSettings((d) => { d.animation.replyFadeInMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
+          <Field label={`停留最短 ${settings.animation.replyLingerMinMs}ms（回信写完后至少停多久）`}><input type="range" min="200" max="9000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); })} /></Field>
+          <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms（长回复最多停多久）`}><input type="range" min="600" max="12000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
+          <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms（回信每多一行额外多停一会）`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
+          <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms（每个字自己淡掉的时长）`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
+          <Field label={`行间延迟 ${settings.animation.replyLineDelayMs}ms（旧参数，当前逐字淡出影响很弱）`}><input type="range" min="100" max="1200" step="20" value={settings.animation.replyLineDelayMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineDelayMs = Number(e.target.value); })} /></Field>
+          <Field label={`整体淡出阈值 ${settings.animation.wholeFadeLineThreshold} 行（旧参数，当前主要保留兼容）`}><input type="range" min="1" max="4" value={settings.animation.wholeFadeLineThreshold} onChange={(e) => updateSettings((d) => { d.animation.wholeFadeLineThreshold = Number(e.target.value); })} /></Field>
         </Section>
 
         <Section id="input" title="手写输入" settings={settings} toggleSection={toggleSection}>
