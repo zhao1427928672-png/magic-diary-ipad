@@ -560,8 +560,17 @@ function normalizeRecognizedText(recognizedText: string) {
     .trim();
 }
 
+function extractWrittenContent(recognizedText: string) {
+  const normalized = normalizeRecognizedText(recognizedText)
+    .replace(/^用户刚刚在日记纸上写下[:：]\s*/u, '')
+    .replace(/^图片里(?:写的是|是)[:：]?\s*/u, '')
+    .replace(/^你写下的是[:：]?\s*/u, '')
+    .trim();
+  return normalized;
+}
+
 function hasEnoughRecognizedText(recognizedText: string) {
-  const normalized = normalizeRecognizedText(recognizedText).replace(/\[看不清\]/g, '').replace(/[\s\p{P}]/gu, '');
+  const normalized = extractWrittenContent(recognizedText).replace(/\[看不清\]/g, '').replace(/[\s\p{P}]/gu, '');
   return normalized.length >= 2;
 }
 
@@ -1033,18 +1042,21 @@ function App() {
         : await postChatCompletionFirstSentence(replyModel, messages, replyTokenBudget());
     }
     const recognizedText = await postChatCompletion(visionModel, [
-      { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留，不要解释，不要回答问题，不要发挥。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
+      { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留，不要解释，不要回答问题，不要发挥。绝对不要输出“用户刚刚在日记纸上写下：”之类的包装句，也不要转述系统提示。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
       { role: 'user', content: [
-        { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。除手写原文外不要输出别的。' },
+        { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。只输出用户真正写下的文字本身，不要加任何前缀、解释或分析。' },
         dataUrlToOpenAIImage(imageDataUrl),
       ] },
     ], 260);
-    const normalizedRecognizedText = normalizeRecognizedText(recognizedText);
+    const writtenText = extractWrittenContent(recognizedText);
+    const normalizedRecognizedText = normalizeRecognizedText(writtenText);
     setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
     if (!normalizedRecognizedText || normalizedRecognizedText === '看不清' || !hasEnoughRecognizedText(normalizedRecognizedText)) return '我看见墨迹了，但这次只辨认出零散几个字，还不够稳。你可以写大一点，或者把字间距留开些。';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
-      { role: 'user', content: `用户刚刚在日记纸上写下：\n${normalizedRecognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。` }
+      { role: 'user', content: settings.persona.presetId === 'none'
+        ? `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请直接回答这句话本身，不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。`
+        : `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请按当前系统要求回信。不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。` }
     ], replyTokenBudget());
   }
 
