@@ -125,6 +125,11 @@ const FONT_OPTIONS: FontOption[] = [
   { id: 'system-kaiti', name: '系统楷体', family: 'Kaiti SC, STKaiti, serif' },
 ];
 
+function cloneSettings<T>(value: T): T {
+  if (typeof globalThis.structuredClone === 'function') return globalThis.structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function createDefaultSettings(): Settings {
   return {
   schemaVersion: 4,
@@ -1801,7 +1806,7 @@ function App() {
 
   function updateSettings(mutator: (draft: Settings) => void) {
     setSettings((current) => {
-      const next = structuredClone(current) as Settings;
+      const next = cloneSettings(current) as Settings;
       mutator(next);
       return next;
     });
