@@ -31,6 +31,8 @@ function withCors(response, stream = false) {
     headers.set('Cache-Control', 'no-cache, no-transform');
     if (!headers.get('Content-Type')) headers.set('Content-Type', 'text/event-stream; charset=utf-8');
     headers.set('X-Accel-Buffering', 'no');
+  } else {
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

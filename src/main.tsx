@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Component, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
 import { addHistoryEntry, clearHistory, loadHistory, type HistoryEntry } from './historyStore';
@@ -20,6 +20,9 @@ const PAPER_TEXTURE_SRC = `${ASSET_BASE}assets/parchment-texture.png`;
 
 const paperTexture = new Image();
 paperTexture.src = PAPER_TEXTURE_SRC;
+// R6 fix: track load failure so drawPaper can fall back to solid fill
+let paperTextureFailed = false;
+paperTexture.onerror = () => { paperTextureFailed = true; };
 
 
 type FontOption = {
@@ -107,10 +110,11 @@ type Settings = {
 
 const SETTINGS_KEY = 'magic-diary-settings-v1';
 const PRESETS_KEY = 'magic-diary-presets-v1';
+const MODEL_OPTIONS_KEY = 'magic-diary-model-options-v1';
+const REVEAL_DELAY_KEY = 'magic-diary-reveal-delay';
 function loadDiagnosticsState() {
   return loadDiagnostics();
 }
-const MODEL_OPTIONS_KEY = 'magic-diary-model-options-v1';
 function modelOptionsCacheKey(baseUrl: string) {
   return `${MODEL_OPTIONS_KEY}:${(baseUrl || '').trim().replace(/\/+$/, '') || 'default'}`;
 }
@@ -417,6 +421,9 @@ function drawPaper(ctx: CanvasRenderingContext2D, w: number, h: number, settings
   ctx.fillStyle = '#ead9b6';
   ctx.fillRect(0, 0, w, h);
 
+  // R6 fix: if texture failed to load, keep the solid fill and never try again
+  if (paperTextureFailed) return;
+
   if (!paperTexture.complete || !paperTexture.naturalWidth) {
     paperTexture.onload = () => drawPaper(ctx, w, h, settings);
     return;
@@ -613,6 +620,7 @@ function App() {
   const longPressTimerRef = useRef<number | null>(null);
   const replyDelayTimerRef = useRef<number | null>(null);
   const replyFadeRafRef = useRef<number | null>(null);
+  const revealTimerRef = useRef<number | null>(null); // R3 fix: cancellable reveal timer
   const replyGenerationRef = useRef(0);
   const inkGenerationRef = useRef(0);
   const inkFadeRafRef = useRef<number | null>(null);
@@ -621,6 +629,14 @@ function App() {
   useEffect(() => {
     diagnosticsEnabledRef.current = diagnostics.enabled;
   }, [diagnostics.enabled]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      // Private mode or storage quota errors should not break the diary surface.
+    }
+  }, [settings]);
 
   function refreshDiagnostics() {
     setDiagnostics(loadDiagnosticsState());
@@ -776,6 +792,10 @@ function App() {
     if (replyFadeRafRef.current) {
       window.cancelAnimationFrame(replyFadeRafRef.current);
       replyFadeRafRef.current = null;
+    }
+    if (revealTimerRef.current) {
+      window.clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
     }
   }
 
@@ -1179,7 +1199,9 @@ function App() {
 
   async function commitInk() {
     clearInkTimers();
+    clearReplyTimers(); // R1 fix: clear any stale reply timers before entering new turn
     const inkGeneration = ++inkGenerationRef.current;
+    const replyGeneration = ++replyGenerationRef.current; // R1 fix: single increment, both gens in sync
     const ctxs = ctxsRef.current;
     if (!ctxs || strokesRef.current.length === 0) return;
     const { w, h } = sizeRef.current;
@@ -1194,14 +1216,13 @@ function App() {
     lastInputBoxRef.current = bboxForStrokes(strokesSnapshot, 8) || bbox;
     setPhase('drinking');
     setStatus('纸页正在读走你的墨迹……');
-    const generation = ++replyGenerationRef.current;
-    clearReplyTimers();
+    const generation = replyGeneration;
     let revealReady = false;
     let replyStarted = false;
     let streamedAny = false;
     let streamedText = '';
     let replyText: string | null = null;
-    const isCurrentTurn = () => inkGenerationRef.current === inkGeneration;
+    const isCurrentTurn = () => inkGenerationRef.current === inkGeneration && replyGenerationRef.current === generation;
     const maybeStartReply = () => {
       if (!revealReady || replyText === null) return;
       if (isCurrentTurn()) {
@@ -1209,7 +1230,10 @@ function App() {
         startReply(replyText);
       }
     };
-    window.setTimeout(() => {
+    // R3 fix: save reveal timer so it can be cancelled
+    if (revealTimerRef.current) window.clearTimeout(revealTimerRef.current);
+    revealTimerRef.current = window.setTimeout(() => {
+      revealTimerRef.current = null;
       if (!isCurrentTurn()) return;
       revealReady = true;
       setStatus(replyText === null ? '日记正在回信……' : '墨迹开始浮现。');
@@ -1391,7 +1415,12 @@ function App() {
     ctx.save();
     ctx.strokeStyle = settings.font.inkColor;
     ctx.globalAlpha = settings.font.inkOpacity;
-    ctx.lineWidth = 2.1;
+    // Render fix: line width scales with reply font size, not fixed 2.1
+    const refFontSize = lines.length && lines[0].canvas
+      ? Math.max(12, Number(ctx.font?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24))
+      : 24;
+    const baseLineWidth = Math.max(1.2, Math.min(4.5, refFontSize / 11));
+    ctx.lineWidth = baseLineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.shadowColor = 'rgba(40, 22, 0, .16)';
@@ -1540,7 +1569,13 @@ function App() {
       ? Math.max(settings.animation.replyFadeInMs, Math.min(7000, quillAnimationLength(lines) / 0.9))
       : settings.animation.replyFadeInMs;
     const fadeIn = () => {
-      if (replyGenerationRef.current !== generation) return;
+      if (replyGenerationRef.current !== generation) {
+        // R2 fix: generation expired during fade-in — clean up
+        ctxs.reply.clearRect(0, 0, w, h);
+        replyLinesRef.current = [];
+        replyFadeRafRef.current = null;
+        return;
+      }
       const t = clamp((performance.now() - start) / duration, 0, 1);
       const eased = t * t * (3 - 2 * t);
       ctxs.reply.clearRect(0, 0, w, h);
@@ -1581,13 +1616,21 @@ function App() {
     const totalDuration = charFadeDuration + Math.max(0, totalChars - 1) * charDelay;
 
     const step = () => {
-      if (replyGenerationRef.current !== expectedGeneration) return;
+      if (replyGenerationRef.current !== expectedGeneration) {
+        // R2 fix: generation expired — clean up reply canvas instead of leaving residue
+        ctxs.reply.clearRect(0, 0, w, h);
+        replyLinesRef.current = [];
+        replyFadeRafRef.current = null;
+        return;
+      }
       const elapsed = performance.now() - start;
       ctxs.reply.clearRect(0, 0, w, h);
       let charOffset = 0;
       ctxs.reply.save();
       ctxs.reply.strokeStyle = settings.font.inkColor;
-      ctxs.reply.lineWidth = 2.1;
+      // Render fix: scale line width with font size
+      const fadeRefFontSize = Math.max(12, Number(replyFontRef.current?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24));
+      ctxs.reply.lineWidth = Math.max(1.2, Math.min(4.5, fadeRefFontSize / 11));
       ctxs.reply.lineCap = 'round';
       ctxs.reply.lineJoin = 'round';
       ctxs.reply.shadowColor = 'rgba(40, 22, 0, .16)';
@@ -1683,11 +1726,11 @@ function App() {
       ++inkGenerationRef.current;
       clearInkTimers();
       if (settings.input.onWriteDuringReply === 'clear-immediately') {
-        ++replyGenerationRef.current;
         clearReplyTimers();
         ctxs.reply.clearRect(0, 0, sizeRef.current.w, sizeRef.current.h);
         replyLinesRef.current = [];
       } else if (settings.input.onWriteDuringReply === 'fade-out' && replyLinesRef.current.length) {
+        // R1 fix: do NOT increment replyGenerationRef here — let fadeReply run with current gen
         fadeReply(replyGenerationRef.current);
       }
       ctxs.effects.clearRect(0, 0, sizeRef.current.w, sizeRef.current.h);
@@ -1958,6 +2001,23 @@ function App() {
           setSettingsOpen(true);
         }}
       >⚙</button>
+      <button
+        className="diagnostics-trigger"
+        type="button"
+        aria-label="打开诊断模式"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!diagnostics.enabled) setDiagnosticsEnabled(true);
+          setSettingsOpen(true);
+          setTimeout(() => {
+            try {
+              document.getElementById('section-diagnostics')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } catch { /* noop */ }
+          }, 120);
+        }}
+        title="诊断模式"
+      >🩺</button>
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
@@ -1991,7 +2051,7 @@ function App() {
 function Section({ id, title, settings, toggleSection, children }: { id: string; title: string; settings: Settings; toggleSection: (id: string) => void; children: React.ReactNode }) {
   const open = settings.ui.expandedSections[id] ?? true;
   return (
-    <section className="settings-section">
+    <section className="settings-section" id={`section-${id}`} data-section-id={id}>
       <button className="section-title" type="button" onClick={() => toggleSection(id)}>
         <span>{title}</span>
         <span>{open ? '收起' : '展开'}</span>
@@ -2285,4 +2345,39 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
   );
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    try {
+      const existing = localStorage.getItem('magic-diary-diagnostics-v1');
+      const parsed = existing ? JSON.parse(existing) : { events: [], lastError: null, enabled: true };
+      parsed.lastError = { at: new Date().toISOString(), message: error.message || 'unknown' };
+      parsed.events = [...(parsed.events || []), { at: new Date().toISOString(), kind: 'react-error', detail: `${error.message || 'unknown'} | ${(info.componentStack || '').slice(0, 200)}` }].slice(-60);
+      localStorage.setItem('magic-diary-diagnostics-v1', JSON.stringify(parsed));
+    } catch {
+      // ignore storage failures
+    }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: '24px', fontFamily: 'system-ui, sans-serif', color: '#2d1b0d', background: '#ead9b6', minHeight: '100vh' }}>
+          <h2>页面出错了</h2>
+          <p>错误信息：{this.state.error.message}</p>
+          <p>已记录到诊断模式。重新打开设置 → 诊断模式 可复制调试信息发给我。</p>
+          <button type="button" onClick={() => location.reload()} style={{ marginTop: '12px', padding: '8px 16px' }}>刷新重试</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById('root')!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
