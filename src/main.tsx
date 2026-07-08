@@ -1137,7 +1137,7 @@ function App() {
         { role: 'system', content: personaPrompt(settings) },
         { role: 'user', content: [
           { type: 'text', text: settings.persona.presetId === 'none'
-            ? '读懂图片里的手写内容后，直接回答用户写下的内容。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。每一句都尽快用句号或问号结束。'
+            ? '先尽力读懂图片里的手写内容，再用一句自然中文回应它。绝对不要原样复述、转写、改写或拼接用户手写内容；不要说“你写下的是”“我看到你写了”“图片里是”；不要只输出识别到的字词；不要解释识别过程。若内容只是问候、碎句或情绪，也要给一句自然回应，而不是重复原文。'
             : `读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。按当前回复长度设置输出，不要故意截短；每一句都尽快用句号或问号结束。当前回复长度：${settings.persona.replyLength}。` },
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
@@ -1423,11 +1423,11 @@ function App() {
     ctx.save();
     ctx.strokeStyle = settings.font.inkColor;
     ctx.globalAlpha = settings.font.inkOpacity;
-    // Render fix: base width now respects user slider + font size
+    // Render fix: user slider should have obvious effect, not be too subtle
     const refFontSize = lines.length && lines[0].canvas
       ? Math.max(12, Number(ctx.font?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24))
       : 24;
-    const baseLineWidth = clamp(settings.font.strokeWidth * (refFontSize / 24), 1.0, 6.2);
+    const baseLineWidth = clamp(settings.font.strokeWidth * Math.max(0.85, refFontSize / 18), 0.9, 8.5);
     ctx.lineWidth = baseLineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1636,9 +1636,9 @@ function App() {
       let charOffset = 0;
       ctxs.reply.save();
       ctxs.reply.strokeStyle = settings.font.inkColor;
-      // Render fix: scale line width with font size
+      // Keep fade visual weight in sync with the writing pass
       const fadeRefFontSize = Math.max(12, Number(replyFontRef.current?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24));
-      ctxs.reply.lineWidth = Math.max(1.2, Math.min(4.5, fadeRefFontSize / 11));
+      ctxs.reply.lineWidth = clamp(settings.font.strokeWidth * Math.max(0.85, fadeRefFontSize / 18), 0.9, 8.5);
       ctxs.reply.lineCap = 'round';
       ctxs.reply.lineJoin = 'round';
       ctxs.reply.shadowColor = 'rgba(40, 22, 0, .16)';
