@@ -63,6 +63,7 @@ type Settings = {
     lineHeight: number;
     inkColor: string;
     inkOpacity: number;
+    strokeWidth: number;
     shadowStrength: number;
     maxWidth: number;
   };
@@ -172,6 +173,7 @@ function createDefaultSettings(): Settings {
     lineHeight: 1.65,
     inkColor: '#1a1208',
     inkOpacity: 1,
+    strokeWidth: 2.2,
     shadowStrength: 1.2,
     maxWidth: 720,
   },
@@ -287,6 +289,7 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.font.fontSizePx = clamp(Number(clean.font.fontSizePx) || 24, 16, 96);
   clean.font.lineHeight = clamp(Number(clean.font.lineHeight) || 1.65, 1.1, 2.2);
   clean.font.inkOpacity = clamp(Number(clean.font.inkOpacity) || 1, 0.2, 1);
+  clean.font.strokeWidth = clamp(Number(clean.font.strokeWidth) || 2.2, 1.2, 4.8);
   clean.font.shadowStrength = clamp(Number(clean.font.shadowStrength) || 1.2, 0, 8);
   clean.font.maxWidth = clamp(Number(clean.font.maxWidth) || 720, 280, 900);
   clean.animation.speedPreset = oneOf(clean.animation.speedPreset, ['slow', 'standard', 'fast', 'custom'] as const, 'standard');
@@ -1420,11 +1423,11 @@ function App() {
     ctx.save();
     ctx.strokeStyle = settings.font.inkColor;
     ctx.globalAlpha = settings.font.inkOpacity;
-    // Render fix: line width scales with reply font size, not fixed 2.1
+    // Render fix: base width now respects user slider + font size
     const refFontSize = lines.length && lines[0].canvas
       ? Math.max(12, Number(ctx.font?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24))
       : 24;
-    const baseLineWidth = Math.max(1.2, Math.min(4.5, refFontSize / 11));
+    const baseLineWidth = clamp(settings.font.strokeWidth * (refFontSize / 24), 1.0, 6.2);
     ctx.lineWidth = baseLineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1734,9 +1737,9 @@ function App() {
         clearReplyTimers();
         ctxs.reply.clearRect(0, 0, sizeRef.current.w, sizeRef.current.h);
         replyLinesRef.current = [];
+      // Keep old reply fading at its own pace while new writing starts; don't interrupt it.
       } else if (settings.input.onWriteDuringReply === 'fade-out' && replyLinesRef.current.length) {
-        // R1 fix: do NOT increment replyGenerationRef here — let fadeReply run with current gen
-        fadeReply(replyGenerationRef.current);
+        // no-op: let existing fade continue naturally alongside new ink
       }
       ctxs.effects.clearRect(0, 0, sizeRef.current.w, sizeRef.current.h);
       setPhase('listening');
@@ -2276,6 +2279,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label={`行距 ${settings.font.lineHeight.toFixed(2)}`}><input type="range" min="1.1" max="2.2" step="0.05" value={settings.font.lineHeight} onChange={(e) => updateSettings((d) => { d.font.lineHeight = Number(e.target.value); })} /></Field>
           <Field label="墨色"><input type="color" value={settings.font.inkColor} onChange={(e) => updateSettings((d) => { d.font.inkColor = e.target.value; })} /></Field>
           <Field label={`墨色透明 ${settings.font.inkOpacity.toFixed(2)}`}><input type="range" min="0.2" max="1" step="0.05" value={settings.font.inkOpacity} onChange={(e) => updateSettings((d) => { d.font.inkOpacity = Number(e.target.value); })} /></Field>
+          <Field label={`回信笔粗细 ${settings.font.strokeWidth.toFixed(2)}`}><input type="range" min="1.2" max="4.8" step="0.1" value={settings.font.strokeWidth} onChange={(e) => updateSettings((d) => { d.font.strokeWidth = Number(e.target.value); })} /></Field>
           <Field label={`阴影 ${settings.font.shadowStrength.toFixed(1)}`}><input type="range" min="0" max="8" step="0.2" value={settings.font.shadowStrength} onChange={(e) => updateSettings((d) => { d.font.shadowStrength = Number(e.target.value); })} /></Field>
           <Field label={`最大行宽 ${settings.font.maxWidth}px`}><input type="range" min="280" max="900" value={settings.font.maxWidth} onChange={(e) => updateSettings((d) => { d.font.maxWidth = Number(e.target.value); })} /></Field>
         </Section>
