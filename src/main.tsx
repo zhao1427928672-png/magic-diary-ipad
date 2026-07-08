@@ -792,12 +792,12 @@ function App() {
     };
   }, [settings]);
 
-  function clearReplyTimers() {
+  function clearReplyTimers(options?: { keepFadeRaf?: boolean }) {
     if (replyDelayTimerRef.current) {
       window.clearTimeout(replyDelayTimerRef.current);
       replyDelayTimerRef.current = null;
     }
-    if (replyFadeRafRef.current) {
+    if (!options?.keepFadeRaf && replyFadeRafRef.current) {
       window.cancelAnimationFrame(replyFadeRafRef.current);
       replyFadeRafRef.current = null;
     }
@@ -1207,7 +1207,7 @@ function App() {
 
   async function commitInk() {
     clearInkTimers();
-    clearReplyTimers(); // R1 fix: clear any stale reply timers before entering new turn
+    clearReplyTimers({ keepFadeRaf: true }); // keep old fade running while new writing starts
     const inkGeneration = ++inkGenerationRef.current;
     const replyGeneration = ++replyGenerationRef.current; // R1 fix: single increment, both gens in sync
     const ctxs = ctxsRef.current;
