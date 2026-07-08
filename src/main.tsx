@@ -8,7 +8,7 @@ import './styles.css';
 type Point = { x: number; y: number; pressure: number; t: number };
 type Stroke = { points: Point[] };
 type StrikeCandidate = { bbox: BBox; at: number };
-type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement; quillStrokes?: InkStroke[]; quillScale?: number };
+type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement; quillStrokes?: InkStroke[]; quillScale?: number; quillChars?: Array<{ offsetX: number; strokes: InkStroke[] }> };
 type Phase = 'listening' | 'pending' | 'drinking' | 'thinking' | 'replying' | 'lingering';
 
 type BBox = { x: number; y: number; w: number; h: number };
@@ -1259,6 +1259,14 @@ function App() {
     ctx.stroke();
   }
 
+  function drawFullStroke(ctx: CanvasRenderingContext2D, stroke: InkStroke, x: number, y: number, scale: number) {
+    if (stroke.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(x + stroke[0].x * scale, y + stroke[0].y * scale);
+    for (let i = 1; i < stroke.length; i += 1) ctx.lineTo(x + stroke[i].x * scale, y + stroke[i].y * scale);
+    ctx.stroke();
+  }
+
   function quillSegments(lines: ReplyLine[]) {
     return lines.flatMap((line) => (line.quillStrokes || []).map((stroke) => ({ line, stroke, len: strokeLength(stroke) * (line.quillScale || 1) })));
   }
@@ -1402,9 +1410,18 @@ function App() {
       try {
         replyLine.quillStrokes = strokesForText(replyLine.text, quillFontSpec).slice(0, 900);
         replyLine.quillScale = replyFontSize / quillFontSize;
+        let left = 0;
+        replyLine.quillChars = Array.from(replyLine.text).map((ch, index) => {
+          const right = replyLine.charEnds?.[index] ?? replyLine.width;
+          const strokes = strokesForText(ch, quillFontSpec).slice(0, 180);
+          const item = { offsetX: left / (replyLine.quillScale || 1), strokes };
+          left = right;
+          return item;
+        });
       } catch {
         replyLine.quillStrokes = [];
         replyLine.quillScale = 1;
+        replyLine.quillChars = [];
       }
     }
     replyLinesRef.current = lines;
@@ -1446,9 +1463,8 @@ function App() {
     if (!ctxs) return;
     const { w, h } = sizeRef.current;
     const lines = replyLinesRef.current;
-    const fontSpec = replyFontRef.current;
-    const snapshot = replySnapshotRef.current;
-    if (!lines.length || !fontSpec || !snapshot) {
+    const hasQuill = lines.some((line) => line.quillChars?.length);
+    if (!lines.length || !hasQuill) {
       ctxs.reply.clearRect(0, 0, w, h);
       setPhase('listening');
       setStatus('继续写。');
@@ -1456,41 +1472,37 @@ function App() {
     }
 
     const start = performance.now();
-    const totalChars = Math.max(1, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0));
-    const charFadeDuration = Math.max(settings.animation.replyLineFadeMs * 0.38, 700);
-    const charDelay = Math.max(70, Math.min(180, settings.animation.replyLineFadeMs / Math.max(totalChars * 1.15, 1)));
+    const totalChars = Math.max(1, lines.reduce((sum, line) => sum + (line.quillChars?.length || 0), 0));
+    const charFadeDuration = Math.max(settings.animation.replyLineFadeMs * 0.5, 900);
+    const charDelay = Math.max(90, Math.min(220, settings.animation.replyLineFadeMs / Math.max(totalChars * 0.9, 1)));
     const totalDuration = charFadeDuration + Math.max(0, totalChars - 1) * charDelay;
 
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
       ctxs.reply.clearRect(0, 0, w, h);
-      const padY = 10;
       let charOffset = 0;
+      ctxs.reply.save();
+      ctxs.reply.strokeStyle = settings.font.inkColor;
+      ctxs.reply.lineWidth = 2.1;
+      ctxs.reply.lineCap = 'round';
+      ctxs.reply.lineJoin = 'round';
+      ctxs.reply.shadowColor = 'rgba(40, 22, 0, .16)';
+      ctxs.reply.shadowBlur = settings.font.shadowStrength;
       for (const line of lines) {
-        const count = Math.max(1, Array.from(line.text).length);
-        const lineBox = bboxForReplyLine(line);
-        if (!lineBox) {
-          charOffset += count;
-          continue;
-        }
-        for (let i = 0; i < count; i += 1) {
-          const local = clamp((elapsed - (charOffset + i) * charDelay) / charFadeDuration, 0, 1);
+        const scale = line.quillScale || 1;
+        for (const char of line.quillChars || []) {
+          const local = clamp((elapsed - charOffset * charDelay) / charFadeDuration, 0, 1);
           const eased = 1 - Math.pow(1 - local, 2.0);
-          const alpha = 1 - eased;
-          if (alpha <= 0.01) continue;
-          const left = i === 0 ? 0 : (line.charEnds?.[i - 1] ?? 0);
-          const right = line.charEnds?.[i] ?? line.width;
-          ctxs.reply.save();
-          ctxs.reply.globalAlpha = alpha;
-          ctxs.reply.beginPath();
-          ctxs.reply.rect(line.x + left - 4, line.y - padY - 4, right - left + 16, lineBox.h + 20);
-          ctxs.reply.clip();
-          ctxs.reply.drawImage(snapshot, 0, 0, w, h);
-          ctxs.reply.restore();
+          const alpha = (1 - eased) * settings.font.inkOpacity;
+          if (alpha > 0.01) {
+            ctxs.reply.globalAlpha = alpha;
+            for (const stroke of char.strokes) drawFullStroke(ctxs.reply, stroke, line.x + char.offsetX * scale, line.y, scale);
+          }
+          charOffset += 1;
         }
-        charOffset += count;
       }
+      ctxs.reply.restore();
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
