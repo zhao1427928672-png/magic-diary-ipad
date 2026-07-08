@@ -575,7 +575,6 @@ function App() {
   const lastInputBoxRef = useRef<BBox | null>(null);
   const replyLinesRef = useRef<ReplyLine[]>([]);
   const replyFontRef = useRef('');
-  const replySnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const [phase, setPhase] = useState<Phase>('listening');
   const [status, setStatus] = useState('写一句话，然后停笔。');
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -1271,13 +1270,20 @@ function App() {
     return lines.flatMap((line) => (line.quillStrokes || []).map((stroke) => ({ line, stroke, len: strokeLength(stroke) * (line.quillScale || 1) })));
   }
 
+  function quillCharSegments(lines: ReplyLine[]) {
+    return lines.flatMap((line) => (line.quillChars || []).flatMap((char) => char.strokes.map((stroke) => ({ line, offsetX: char.offsetX, stroke, len: strokeLength(stroke) * (line.quillScale || 1) }))));
+  }
+
   function quillAnimationLength(lines: ReplyLine[]) {
-    const all = quillSegments(lines);
-    return Math.max(1, all.reduce((sum, item) => sum + item.len, 0) + Math.max(0, all.length - 1) * 14);
+    const all = quillCharSegments(lines);
+    if (all.length) return Math.max(1, all.reduce((sum, item) => sum + item.len, 0) + Math.max(0, all.length - 1) * 14);
+    const fallback = quillSegments(lines);
+    return Math.max(1, fallback.reduce((sum, item) => sum + item.len, 0) + Math.max(0, fallback.length - 1) * 14);
   }
 
   function drawReplyQuillWriting(ctx: CanvasRenderingContext2D, lines: ReplyLine[], progress: number, settings: Settings) {
-    const all = quillSegments(lines);
+    const allChars = quillCharSegments(lines);
+    const all = allChars.length ? allChars : quillSegments(lines).map((item) => ({ ...item, offsetX: 0 }));
     const total = quillAnimationLength(lines);
     let cursor = 0;
     ctx.save();
@@ -1292,7 +1298,7 @@ function App() {
     for (const item of all) {
       const start = cursor;
       const local = clamp((drawn - start) / Math.max(1, item.len), 0, 1);
-      if (local > 0) drawPartialStroke(ctx, item.stroke, item.line.x, item.line.y, item.line.quillScale || 1, local);
+      if (local > 0) drawPartialStroke(ctx, item.stroke, item.line.x + (item.offsetX || 0) * (item.line.quillScale || 1), item.line.y, item.line.quillScale || 1, local);
       cursor += item.len + 14;
     }
     ctx.restore();
@@ -1441,11 +1447,6 @@ function App() {
       if (t < 1) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
-        const snapshot = document.createElement('canvas');
-        snapshot.width = ctxs.reply.canvas.width;
-        snapshot.height = ctxs.reply.canvas.height;
-        snapshot.getContext('2d')?.drawImage(ctxs.reply.canvas, 0, 0);
-        replySnapshotRef.current = snapshot;
         setPhase('lingering');
         setStatus('写完了。你可以继续写。');
         const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 5000 + lines.length * settings.animation.replyLingerPerLineMs));
