@@ -1296,20 +1296,25 @@ function App() {
     const totalChars = Math.max(1, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0));
     let charOffset = 0;
     for (const line of lines) {
-      if (!line.canvas) { charOffset += Array.from(line.text).length; continue; }
+      if (!line.canvas) {
+        charOffset += Math.max(1, Array.from(line.text).length);
+        continue;
+      }
       const chars = Array.from(line.text);
       const lineCanvasW = line.canvas.width / dpr;
       const lineCanvasH = line.canvas.height / dpr;
       for (let i = 0; i < chars.length; i += 1) {
         const global = charOffset + i;
         const local = clamp(progress * totalChars - global, 0, 1);
-        if (local >= 1) continue;
+        const eased = 1 - Math.pow(1 - local, 2.0);
+        const alpha = 1 - eased;
+        if (alpha <= 0.01) continue;
         const left = i === 0 ? 0 : (line.charEnds?.[i - 1] ?? 0);
         const right = line.charEnds?.[i] ?? line.width;
         ctx.save();
-        ctx.globalAlpha = 1 - Math.max(0, local - 0.15) / 0.85;
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
-        ctx.rect(line.x + left - 4, line.y - padY, right - left + 14, lineCanvasH);
+        ctx.rect(line.x + left - 4, line.y - padY, right - left + 16, lineCanvasH);
         ctx.clip();
         ctx.drawImage(line.canvas, line.x - padX, line.y - padY, lineCanvasW, lineCanvasH);
         ctx.restore();
@@ -1452,19 +1457,9 @@ function App() {
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
-      let charOffset = 0;
+      const progress = clamp(elapsed / totalDuration, 0, 1);
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLines(ctxs.reply, lines, fontSpec, (line) => {
-        const count = Math.max(1, Array.from(line.text).length);
-        let alphaSum = 0;
-        for (let i = 0; i < count; i += 1) {
-          const local = clamp((elapsed - (charOffset + i) * charDelay) / charFadeDuration, 0, 1);
-          const eased = 1 - Math.pow(1 - local, 2.0);
-          alphaSum += 1 - eased;
-        }
-        charOffset += count;
-        return alphaSum / count;
-      });
+      drawReplyLinesVanishing(ctxs.reply, lines, progress);
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
