@@ -169,7 +169,7 @@ function createDefaultSettings(): Settings {
     replyLingerMinMs: 5000,
     replyLingerMaxMs: 7000,
     replyLingerPerLineMs: 260,
-    replyLineFadeMs: 1800,
+    replyLineFadeMs: 2600,
     replyLineDelayMs: 480,
     wholeFadeLineThreshold: 1,
   },
@@ -1444,14 +1444,15 @@ function App() {
     }
 
     const start = performance.now();
-    const totalDuration = settings.animation.replyLineFadeMs + Math.max(0, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0) - 1) * 34;
+    const totalDuration = Math.max(settings.animation.replyLineFadeMs, 2200);
 
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
       const progress = clamp(elapsed / totalDuration, 0, 1);
+      const eased = 1 - Math.pow(1 - progress, 2.2);
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLinesVanishing(ctxs.reply, lines, 1 - Math.pow(1 - progress, 2.0));
+      drawReplyLines(ctxs.reply, lines, fontSpec, () => 1 - eased);
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
