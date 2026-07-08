@@ -1444,15 +1444,27 @@ function App() {
     }
 
     const start = performance.now();
-    const totalDuration = Math.max(settings.animation.replyLineFadeMs, 2200);
+    const totalChars = Math.max(1, lines.reduce((sum, line) => sum + Array.from(line.text).length, 0));
+    const charFadeDuration = Math.max(settings.animation.replyLineFadeMs * 0.38, 700);
+    const charDelay = Math.max(70, Math.min(180, settings.animation.replyLineFadeMs / Math.max(totalChars * 1.15, 1)));
+    const totalDuration = charFadeDuration + Math.max(0, totalChars - 1) * charDelay;
 
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
-      const progress = clamp(elapsed / totalDuration, 0, 1);
-      const eased = 1 - Math.pow(1 - progress, 2.2);
+      let charOffset = 0;
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLines(ctxs.reply, lines, fontSpec, () => 1 - eased);
+      drawReplyLines(ctxs.reply, lines, fontSpec, (line) => {
+        const count = Math.max(1, Array.from(line.text).length);
+        let alphaSum = 0;
+        for (let i = 0; i < count; i += 1) {
+          const local = clamp((elapsed - (charOffset + i) * charDelay) / charFadeDuration, 0, 1);
+          const eased = 1 - Math.pow(1 - local, 2.0);
+          alphaSum += 1 - eased;
+        }
+        charOffset += count;
+        return alphaSum / count;
+      });
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
