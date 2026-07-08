@@ -575,6 +575,7 @@ function App() {
   const lastInputBoxRef = useRef<BBox | null>(null);
   const replyLinesRef = useRef<ReplyLine[]>([]);
   const replyFontRef = useRef('');
+  const replySnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const [phase, setPhase] = useState<Phase>('listening');
   const [status, setStatus] = useState('写一句话，然后停笔。');
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -1423,6 +1424,11 @@ function App() {
       if (t < 1) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
+        const snapshot = document.createElement('canvas');
+        snapshot.width = ctxs.reply.canvas.width;
+        snapshot.height = ctxs.reply.canvas.height;
+        snapshot.getContext('2d')?.drawImage(ctxs.reply.canvas, 0, 0);
+        replySnapshotRef.current = snapshot;
         setPhase('lingering');
         setStatus('写完了。你可以继续写。');
         const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 5000 + lines.length * settings.animation.replyLingerPerLineMs));
@@ -1441,7 +1447,8 @@ function App() {
     const { w, h } = sizeRef.current;
     const lines = replyLinesRef.current;
     const fontSpec = replyFontRef.current;
-    if (!lines.length || !fontSpec) {
+    const snapshot = replySnapshotRef.current;
+    if (!lines.length || !fontSpec || !snapshot) {
       ctxs.reply.clearRect(0, 0, w, h);
       setPhase('listening');
       setStatus('继续写。');
@@ -1457,9 +1464,33 @@ function App() {
     const step = () => {
       if (replyGenerationRef.current !== expectedGeneration) return;
       const elapsed = performance.now() - start;
-      const progress = clamp(elapsed / totalDuration, 0, 1);
       ctxs.reply.clearRect(0, 0, w, h);
-      drawReplyLinesVanishing(ctxs.reply, lines, progress);
+      const padY = 10;
+      let charOffset = 0;
+      for (const line of lines) {
+        const count = Math.max(1, Array.from(line.text).length);
+        const lineBox = bboxForReplyLine(line);
+        if (!lineBox) {
+          charOffset += count;
+          continue;
+        }
+        for (let i = 0; i < count; i += 1) {
+          const local = clamp((elapsed - (charOffset + i) * charDelay) / charFadeDuration, 0, 1);
+          const eased = 1 - Math.pow(1 - local, 2.0);
+          const alpha = 1 - eased;
+          if (alpha <= 0.01) continue;
+          const left = i === 0 ? 0 : (line.charEnds?.[i - 1] ?? 0);
+          const right = line.charEnds?.[i] ?? line.width;
+          ctxs.reply.save();
+          ctxs.reply.globalAlpha = alpha;
+          ctxs.reply.beginPath();
+          ctxs.reply.rect(line.x + left - 4, line.y - padY, right - left + 16, lineBox.h);
+          ctxs.reply.clip();
+          ctxs.reply.drawImage(snapshot, 0, 0, w, h);
+          ctxs.reply.restore();
+        }
+        charOffset += count;
+      }
       if (elapsed < totalDuration) {
         replyFadeRafRef.current = requestAnimationFrame(step);
       } else {
