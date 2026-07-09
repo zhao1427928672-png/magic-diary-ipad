@@ -2395,7 +2395,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           </Field>
           <p className="hint-text">如果主模型没有视觉识别能力，就用这里的“分工模式”：让补充视觉模型先读图识字，再由主回复模型负责真正回信。</p>
           <ModelPicker label="主回复模型" value={settings.ai.model} options={modelOptions} fallback="gpt-4o-mini" onChange={(value) => updateSettings((d) => { d.ai.model = value; })} />
-          <ModelPicker label="补充视觉模型（先识字）" value={settings.ai.visionModel} options={modelOptions} fallback="可留空使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.visionModel = value; })} />
+          <ModelPicker label="补充视觉模型（先识字）" value={settings.ai.visionModel} options={visionModelOptions} fallback="可留空使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.visionModel = value; })} />
           <ModelPicker label="补充回复模型（可留空）" value={settings.ai.replyModel} options={modelOptions} fallback="留空：使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.replyModel = value; })} />
           <Field label={`创造性 ${settings.ai.temperature.toFixed(2)}`}><input type="range" min="0" max="2" step="0.05" value={settings.ai.temperature} onChange={(e) => updateSettings((d) => { d.ai.temperature = Number(e.target.value); })} /></Field>
           <Field label={`最大输出 ${settings.ai.maxTokens}`}><input type="range" min="80" max="4000" step="20" value={settings.ai.maxTokens} onChange={(e) => updateSettings((d) => { d.ai.maxTokens = Number(e.target.value); })} /></Field>
