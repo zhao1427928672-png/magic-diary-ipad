@@ -398,7 +398,7 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.paper.contrast = clamp(Number(clean.paper.contrast) || 1, 0.6, 1.6);
   clean.paper.vignette = clamp(Number(clean.paper.vignette) || 0, 0, 0.7);
   clean.reply.positionMode = oneOf(clean.reply.positionMode, ['auto', 'fixed-center', 'follow-writing'] as const, 'auto');
-  clean.persona.presetId = oneOf(clean.persona.presetId, ['none', 'old-paper-reply', 'riddle-diary', 'quiet-friend', 'calm-mentor', 'cultivation-note', 'dream-oracle', 'custom'] as const, 'old-paper-reply');
+  clean.persona.presetId = oneOf(clean.persona.presetId, ['none', 'old-paper-reply', 'riddle-diary', 'quiet-friend', 'calm-mentor', 'cultivation-note', 'dream-oracle', 'custom'] as const, 'quiet-friend');
   clean.persona.replyLength = oneOf(clean.persona.replyLength, ['very-short', 'short', 'standard', 'detailed'] as const, 'short');
   clean.persona.replyMode = oneOf(clean.persona.replyMode, ['reflective', 'answer', 'coach', 'oracle', 'companion'] as const, 'reflective');
   clean.persona.tone = oneOf(clean.persona.tone, ['calm', 'warm', 'mysterious', 'direct', 'encouraging'] as const, 'warm');
