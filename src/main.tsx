@@ -729,6 +729,7 @@ function App() {
   const diagnosticsEnabledRef = useRef(diagnostics.enabled);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [visionModelOptions, setVisionModelOptions] = useState<string[]>([]);
+  const [aiEndpointPresetNames, setAiEndpointPresetNames] = useState<string[]>([]);
   const [scribbleText, setScribbleText] = useState('');
   const longPressTimerRef = useRef<number | null>(null);
   const replyDelayTimerRef = useRef<number | null>(null);
@@ -845,6 +846,12 @@ function App() {
       setVisionModelOptions(Array.isArray(cachedVision) ? cachedVision.filter((id) => typeof id === 'string') : []);
     } catch {
       setVisionModelOptions([]);
+    }
+    try {
+      const presets = JSON.parse(localStorage.getItem(AI_ENDPOINTS_KEY) || '{}');
+      setAiEndpointPresetNames(Object.keys(presets));
+    } catch {
+      setAiEndpointPresetNames([]);
     }
   }, [settings.ai.baseUrl, settings.ai.visionBaseUrl]);
 
@@ -2046,13 +2053,14 @@ function App() {
       replyPipeline: settings.ai.replyPipeline,
     };
     localStorage.setItem(AI_ENDPOINTS_KEY, JSON.stringify(presets));
+    setAiEndpointPresetNames(Object.keys(presets));
     setStatus(`已保存接入配置：${name}`);
   }
 
-  function loadAiEndpoints() {
+  function loadAiEndpoints(nameFromSelect?: string) {
     const presets = JSON.parse(localStorage.getItem(AI_ENDPOINTS_KEY) || '{}');
     const names = Object.keys(presets);
-    const name = window.prompt(`输入要载入的接入配置：${names.join(' / ')}`);
+    const name = nameFromSelect || window.prompt(`输入要载入的接入配置：${names.join(' / ')}`);
     if (!name || !presets[name]) return;
     const preset = presets[name];
     updateSettings((d) => {
@@ -2371,6 +2379,14 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
             <button type="button" onClick={saveAiEndpoints}>保存接入</button>
             <button type="button" onClick={loadAiEndpoints}>载入接入</button>
           </div>
+          {aiEndpointPresetNames.length > 0 && (
+            <Field label="已保存接入配置">
+              <select defaultValue="" onChange={(e) => { if (e.target.value) loadAiEndpoints(e.target.value); e.currentTarget.value = ''; }}>
+                <option value="">选择并载入...</option>
+                {aiEndpointPresetNames.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </Field>
+          )}
           {modelOptions.length > 0 || visionModelOptions.length > 0
             ? <p className="hint-text">主接入模型 {modelOptions.length} 个；补充视觉模型 {visionModelOptions.length} 个。下面会分别用于主回复模型和补充视觉模型选择。</p>
             : <p className="hint-text">还没读取模型时可手动填；读取后会变成下拉选择。主接入和补充视觉接入可以分别读取。</p>}
