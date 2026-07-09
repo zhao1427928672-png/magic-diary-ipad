@@ -41,6 +41,10 @@ type Settings = {
     adapter: 'openai-compatible' | 'custom-http';
     baseUrl: string;
     apiKey: string;
+    primaryEndpointName: string;
+    visionBaseUrl: string;
+    visionApiKey: string;
+    visionEndpointName: string;
     modelMode: 'single' | 'split';
     recognitionMode: 'vision' | 'scribble-first' | 'scribble-only';
     replyPipeline: 'stable' | 'fast-single';
@@ -227,6 +231,10 @@ function createDefaultSettings(): Settings {
     adapter: 'openai-compatible',
     baseUrl: 'https://api.openai.com',
     apiKey: '',
+    primaryEndpointName: '主接入',
+    visionBaseUrl: '',
+    visionApiKey: '',
+    visionEndpointName: '补充视觉接入',
     modelMode: 'single',
     recognitionMode: 'vision',
     replyPipeline: 'stable',
@@ -356,6 +364,10 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.ai.temperature = clamp(Number(clean.ai.temperature) || 0.7, 0, 2);
   clean.ai.maxTokens = clamp(Number(clean.ai.maxTokens) || 360, 80, 4000);
   clean.ai.timeoutMs = clamp(Number(clean.ai.timeoutMs) || 45000, 5000, 120000);
+  clean.ai.primaryEndpointName = String(clean.ai.primaryEndpointName || defaults.ai.primaryEndpointName || '主接入').trim() || '主接入';
+  clean.ai.visionEndpointName = String(clean.ai.visionEndpointName || defaults.ai.visionEndpointName || '补充视觉接入').trim() || '补充视觉接入';
+  clean.ai.visionBaseUrl = String(clean.ai.visionBaseUrl || '').trim();
+  clean.ai.visionApiKey = String(clean.ai.visionApiKey || '').trim();
   clean.ai.visionImage.padding = clamp(Number(clean.ai.visionImage.padding) || 32, 0, 160);
   clean.ai.visionImage.maxSize = clamp(Number(clean.ai.visionImage.maxSize) || 768, 256, 2048);
   clean.ai.visionImage.background = oneOf(clean.ai.visionImage.background, ['white', 'transparent', 'paper'] as const, 'white');
@@ -962,6 +974,8 @@ function App() {
       ['{{model}}', settings.ai.model],
       ['{{visionModel}}', settings.ai.visionModel || settings.ai.model],
       ['{{replyModel}}', settings.ai.replyModel || settings.ai.model],
+      ['{{visionBaseUrl}}', settings.ai.visionBaseUrl || settings.ai.baseUrl],
+      ['{{visionApiKey}}', settings.ai.visionApiKey || settings.ai.apiKey],
       ['{{imageDataUrl}}', imageDataUrl],
       ['{{systemPrompt}}', personaPrompt(settings)],
     ];
@@ -1011,6 +1025,14 @@ function App() {
   function providerUrl(path: string) {
     const base = settings.ai.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
     return `${base}/v1/${path.replace(/^\/+/, '')}`;
+  }
+
+  function visionProviderBaseUrl() {
+    return (settings.ai.visionBaseUrl.trim() || settings.ai.baseUrl.trim()).replace(/\/+$/, '').replace(/\/v1$/, '');
+  }
+
+  function visionProviderApiKey() {
+    return settings.ai.visionApiKey.trim() || settings.ai.apiKey.trim();
   }
 
   function recordHistoryEntry(inputText: string | undefined, reply: string, model?: string, threadIdOverride?: string) {
@@ -1064,8 +1086,10 @@ function App() {
     return currentInput ? `${recent}${recent ? '\n\n' : ''}用户：${currentInput}` : recent;
   }
 
-  async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
-    if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
+  async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+    const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
+    const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
+    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
@@ -1076,13 +1100,13 @@ function App() {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
+        body: JSON.stringify({ baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, payload }),
       });
       if (res.status === 404 || res.status === 405) {
-        res = await fetch(providerUrl('chat/completions'), {
+        res = await fetch(`${effectiveBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/chat/completions`, {
           method: 'POST',
           signal: controller.signal,
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.ai.apiKey}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${effectiveApiKey}` },
           body: JSON.stringify(payload),
         });
       }
@@ -1123,8 +1147,10 @@ function App() {
     return Math.min(settings.ai.maxTokens, 1200);
   }
 
-  async function postChatCompletionStreamSentences(model: string, messages: unknown[], onSentence: (sentence: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens) {
-    if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
+  async function postChatCompletionStreamSentences(model: string, messages: unknown[], onSentence: (sentence: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+    const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
+    const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
+    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
@@ -1138,7 +1164,7 @@ function App() {
         method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
       });
-      if (!res.ok || !res.body) return await postChatCompletionFirstSentence(model, messages, maxTokens);
+      if (!res.ok || !res.body) return await postChatCompletionFirstSentence(model, messages, maxTokens, overrides);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let sseBuffer = '';
@@ -1177,8 +1203,10 @@ function App() {
     }
   }
 
-  async function postChatCompletionFirstSentence(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
-    if (!settings.ai.apiKey.trim()) throw new Error('还没有填写 密钥 API Key。');
+  async function postChatCompletionFirstSentence(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+    const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
+    const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
+    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
     if (!model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
@@ -1194,17 +1222,17 @@ function App() {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
+        body: JSON.stringify({ baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, payload }),
       });
       if (res.status === 404 || res.status === 405) {
-        res = await fetch(providerUrl('chat/completions'), {
+        res = await fetch(`${effectiveBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/chat/completions`, {
           method: 'POST',
           signal: controller.signal,
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.ai.apiKey}` },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${effectiveApiKey}` },
           body: JSON.stringify({ ...payload, stream: true }),
         });
       }
-      if (!res.ok || !res.body) return await postChatCompletion(model, messages, maxTokens);
+      if (!res.ok || !res.body) return await postChatCompletion(model, messages, maxTokens, overrides);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -1247,7 +1275,7 @@ function App() {
       const cleaned = cleanDiaryReply(acc.trim());
       return cleaned || acc.trim() || await postChatCompletion(model, messages, maxTokens);
     } catch (error) {
-      if (error instanceof TypeError) return await postChatCompletion(model, messages, maxTokens);
+      if (error instanceof TypeError) return await postChatCompletion(model, messages, maxTokens, overrides);
       throw error;
     } finally {
       window.clearTimeout(timeout);
@@ -1279,7 +1307,7 @@ function App() {
         { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。只输出用户真正写下的文字本身，不要加任何前缀、解释或分析。' },
         dataUrlToOpenAIImage(imageDataUrl),
       ] },
-    ], 260);
+    ], 260, settings.ai.modelMode === 'split' ? { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey() } : undefined);
     const writtenText = extractWrittenContent(recognizedText);
     const normalizedRecognizedText = normalizeRecognizedText(writtenText);
     setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
@@ -2032,7 +2060,7 @@ function App() {
           { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。除手写原文外不要输出别的。' },
           dataUrlToOpenAIImage(debugSample.imageDataUrl),
         ] },
-      ], 260);
+      ], 260, settings.ai.modelMode === 'split' ? { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey() } : undefined);
       setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizeRecognizedText(recognizedText), model, at: new Date().toISOString() }));
       setStatus('最近一次裁剪图识别完成。');
     } catch (error) {
@@ -2255,8 +2283,12 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
               <option value="custom-http">自定义 HTTP</option>
             </select>
           </Field>
-          <Field label="接口地址 Base URL"><input value={settings.ai.baseUrl} onChange={(e) => updateSettings((d) => { d.ai.baseUrl = e.target.value; })} placeholder="https://api.openai.com" /></Field>
-          <Field label="密钥 API Key"><input type="password" value={settings.ai.apiKey} onChange={(e) => updateSettings((d) => { d.ai.apiKey = e.target.value; })} placeholder="仅保存在当前浏览器" /></Field>
+          <Field label="主接入名称"><input value={settings.ai.primaryEndpointName} onChange={(e) => updateSettings((d) => { d.ai.primaryEndpointName = e.target.value; })} placeholder="例如：主接入" /></Field>
+          <Field label="主接入 Base URL"><input value={settings.ai.baseUrl} onChange={(e) => updateSettings((d) => { d.ai.baseUrl = e.target.value; })} placeholder="https://api.openai.com" /></Field>
+          <Field label="主接入 API Key"><input type="password" value={settings.ai.apiKey} onChange={(e) => updateSettings((d) => { d.ai.apiKey = e.target.value; })} placeholder="仅保存在当前浏览器" /></Field>
+          <Field label="补充视觉接入名称"><input value={settings.ai.visionEndpointName} onChange={(e) => updateSettings((d) => { d.ai.visionEndpointName = e.target.value; })} placeholder="例如：视觉补充接入" /></Field>
+          <Field label="补充视觉接入 Base URL"><input value={settings.ai.visionBaseUrl} onChange={(e) => updateSettings((d) => { d.ai.visionBaseUrl = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
+          <Field label="补充视觉接入 API Key"><input type="password" value={settings.ai.visionApiKey} onChange={(e) => updateSettings((d) => { d.ai.visionApiKey = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={loadModelOptions}>读取可用模型</button>
           </div>
