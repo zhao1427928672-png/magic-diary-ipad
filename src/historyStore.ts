@@ -6,9 +6,11 @@ export type HistoryEntry = {
   model?: string;
   persona?: string;
   replyLength?: string;
+  threadId?: string;
 };
 
 export const HISTORY_KEY = 'magic-diary-history-v1';
+export const HISTORY_THREAD_KEY = 'magic-diary-history-thread-v1';
 const HISTORY_LIMIT = 50;
 const MAX_INPUT_CHARS = 1200;
 const MAX_REPLY_CHARS = 2400;
@@ -35,6 +37,7 @@ function normalizeEntry(item: unknown): HistoryEntry | null {
     model: trimText(data.model, 120),
     persona: trimText(data.persona, 80),
     replyLength: trimText(data.replyLength, 40),
+    threadId: trimText(data.threadId, 80),
   };
 }
 
@@ -59,6 +62,21 @@ export function saveHistory(entries: HistoryEntry[]) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(-HISTORY_LIMIT)));
 }
 
+export function loadActiveThreadId() {
+  if (typeof localStorage === 'undefined') return 'default';
+  const raw = localStorage.getItem(HISTORY_THREAD_KEY);
+  return trimText(raw, 80) || 'default';
+}
+
+export function setActiveThreadId(threadId: string) {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(HISTORY_THREAD_KEY, trimText(threadId, 80) || 'default');
+}
+
+export function createNewThreadId() {
+  return `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function addHistoryEntry(entry: Omit<HistoryEntry, 'id' | 'at'> & Partial<Pick<HistoryEntry, 'id' | 'at'>>) {
   const current = loadHistory();
   const next = normalizeEntry({
@@ -69,6 +87,7 @@ export function addHistoryEntry(entry: Omit<HistoryEntry, 'id' | 'at'> & Partial
     model: entry.model,
     persona: entry.persona,
     replyLength: entry.replyLength,
+    threadId: entry.threadId,
   });
   if (!next) throw new Error('历史记录缺少回信内容。');
   saveHistory([...current, next]);

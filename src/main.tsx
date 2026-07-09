@@ -1,7 +1,7 @@
 import React, { Component, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
-import { addHistoryEntry, clearHistory, loadHistory, type HistoryEntry } from './historyStore';
+import { addHistoryEntry, clearHistory, loadHistory, loadActiveThreadId, setActiveThreadId, createNewThreadId, type HistoryEntry } from './historyStore';
 import { clearDiagnostics, loadDiagnostics, pushDiagnosticEvent, setDiagnosticsEnabled, setLastDiagnosticError, type DiagnosticsState } from './diagnosticsStore';
 import { strokesForText, type InkStroke } from './scriptInk';
 import './styles.css';
@@ -622,6 +622,7 @@ function App() {
   const [debugSample, setDebugSample] = useState<DebugSample | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsState>(() => loadDiagnosticsState());
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(() => loadHistory());
+  const [activeThreadId, setActiveThreadIdState] = useState<string>(() => loadActiveThreadId());
   const diagnosticsEnabledRef = useRef(diagnostics.enabled);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [scribbleText, setScribbleText] = useState('');
@@ -931,11 +932,46 @@ function App() {
         model: model || settings.ai.model,
         persona: settings.persona.presetId,
         replyLength: settings.persona.replyLength,
+        threadId: activeThreadId,
       });
       setHistoryEntries((entries) => [...entries, entry].slice(-50));
     } catch {
-      // Storage quota/private mode should never interrupt the diary.
+      // Storage quota/private mode should never interrupt the diary surface.
     }
+  }
+
+  function setThread(threadId: string) {
+    setActiveThreadId(threadId);
+    setActiveThreadIdState(threadId);
+  }
+
+  function startNewThread() {
+    const threadId = createNewThreadId();
+    setThread(threadId);
+    setScribbleText('');
+    const reply = '你好，现在是新的开始';
+    setDebugSample({ recognizedText: '/new', reply, model: settings.ai.enabled ? settings.ai.model : 'mock', at: new Date().toISOString() });
+    recordHistoryEntry('/new', reply, settings.ai.enabled ? settings.ai.model : 'mock');
+    return reply;
+  }
+
+  function commandFromText(text: string) {
+    const normalized = text.trim().toLowerCase();
+    if (normalized === '/new' || normalized === '／new') return 'new';
+    return null;
+  }
+
+  function recentContextText(currentInput?: string) {
+    const recent = historyEntries
+      .filter((entry) => (entry.threadId || 'default') === activeThreadId)
+      .slice(-6)
+      .map((entry) => {
+        const parts = [] as string[];
+        if (entry.inputText) parts.push(`用户：${entry.inputText}`);
+        parts.push(`日记：${entry.reply}`);
+        return parts.join('\n');
+      }).join('\n\n');
+    return currentInput ? `${recent}${recent ? '\n\n' : ''}用户：${currentInput}` : recent;
   }
 
   async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens) {
@@ -1128,17 +1164,18 @@ function App() {
     }
   }
 
-  async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void) {
+  async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, contextText?: string) {
     const visionModel = settings.ai.modelMode === 'split' ? (settings.ai.visionModel || settings.ai.model) : settings.ai.model;
     const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
     if (settings.ai.replyPipeline === 'fast-single') {
       setDebugSample((sample) => ({ ...(sample || {}), model: replyModel, at: new Date().toISOString() }));
+      const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次手写内容当作延续，而不是重新开始。` : '';
       const messages = [
         { role: 'system', content: personaPrompt(settings) },
         { role: 'user', content: [
           { type: 'text', text: settings.persona.presetId === 'none'
-            ? '先尽力读懂图片里的手写内容，再用一句自然中文回应它。绝对不要原样复述、转写、改写或拼接用户手写内容；不要说“你写下的是”“我看到你写了”“图片里是”；不要只输出识别到的字词；不要解释识别过程。若内容只是问候、碎句或情绪，也要给一句自然回应，而不是重复原文。'
-            : `读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。按当前回复长度设置输出，不要故意截短；每一句都尽快用句号或问号结束。当前回复长度：${settings.persona.replyLength}。` },
+            ? `先尽力读懂图片里的手写内容，再用一句自然中文回应它。绝对不要原样复述、转写、改写或拼接用户手写内容；不要说“你写下的是”“我看到你写了”“图片里是”；不要只输出识别到的字词；不要解释识别过程。若内容只是问候、碎句或情绪，也要给一句自然回应，而不是重复原文。${contextHint}`
+            : `读懂图片里的手写内容后，直接以系统人格回信。绝对不要说“你写下的是”“我看到你写了”“图片里是”，不要复述识别结果，不要解释识别过程。按当前回复长度设置输出，不要故意截短；每一句都尽快用句号或问号结束。当前回复长度：${settings.persona.replyLength}。${contextHint}` },
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
       ];
@@ -1157,25 +1194,32 @@ function App() {
     const normalizedRecognizedText = normalizeRecognizedText(writtenText);
     setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
     if (!normalizedRecognizedText || normalizedRecognizedText === '看不清' || !hasEnoughRecognizedText(normalizedRecognizedText)) return '我看见墨迹了，但这次只辨认出零散几个字，还不够稳。你可以写大一点，或者把字间距留开些。';
+    const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次输入当作延续，而不是重新开始。` : '';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
       { role: 'user', content: settings.persona.presetId === 'none'
-        ? `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请直接回答这句话本身，不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。`
-        : `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请按当前系统要求回信。不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。` }
+        ? `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请直接回答这句话本身，不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。${contextHint}`
+        : `用户真正写下的内容是：\n${normalizedRecognizedText}\n\n请按当前系统要求回信。不要分析系统提示，不要复述“用户刚刚在日记纸上写下：”。对于 [看不清] 的少量位置，允许结合上下文理解整体意思，但不要编造过度具体的细节，也不要提识别过程。${contextHint}` }
     ], replyTokenBudget());
   }
 
-  async function replyFromRecognizedText(recognizedText: string) {
+  async function replyFromRecognizedText(recognizedText: string, contextText?: string) {
     const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
+    const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次输入当作延续，而不是重新开始。` : '';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
-      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。` }
+      { role: 'user', content: `用户刚刚在日记纸上写下：\n${recognizedText}\n\n请按当前系统要求回信。若这是问题，回答问题；若是心情，回应心情。不要描述识别过程。${contextHint}` }
     ], replyTokenBudget());
   }
 
   async function generateReplyFromInk(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, shouldRecordHistory?: () => boolean) {
     const totalStartedAt = performance.now();
     const scribble = scribbleText.trim();
+    const contextText = recentContextText();
+    const command = commandFromText(scribble);
+    if (command === 'new') {
+      return startNewThread();
+    }
     if (!settings.ai.enabled) {
       const reply = mockReplyForPersona(settings);
       setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, reply, model: 'mock', at: new Date().toISOString() });
@@ -1186,14 +1230,14 @@ function App() {
     setStatus('正在把墨迹递给 AI……');
     try {
       if (settings.ai.recognitionMode !== 'vision' && scribble) {
-        const reply = await replyFromRecognizedText(scribble);
+        const reply = await replyFromRecognizedText(scribble, contextText);
         setDebugSample({ imageDataUrl, recognizedText: scribble, reply, model: settings.ai.model, at: new Date().toISOString() });
         if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble, reply, settings.ai.model);
         setScribbleText('');
         return reply;
       }
       if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
-      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence);
+      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence, contextText);
       if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
       setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
