@@ -1471,7 +1471,7 @@ function App() {
     const refFontSize = lines.length && lines[0].canvas
       ? Math.max(12, Number(ctx.font?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24))
       : 24;
-    const baseLineWidth = clamp(settings.font.strokeWidth * Math.max(0.85, refFontSize / 18), 0.9, 8.5);
+    const baseLineWidth = clamp(settings.font.strokeWidth * Math.max(0.55, refFontSize / 28), 0.45, 4.8);
     ctx.lineWidth = baseLineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1682,7 +1682,7 @@ function App() {
       ctxs.reply.strokeStyle = settings.font.inkColor;
       // Keep fade visual weight in sync with the writing pass
       const fadeRefFontSize = Math.max(12, Number(replyFontRef.current?.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24));
-      ctxs.reply.lineWidth = clamp(settings.font.strokeWidth * Math.max(0.85, fadeRefFontSize / 18), 0.9, 8.5);
+      ctxs.reply.lineWidth = clamp(settings.font.strokeWidth * Math.max(0.55, fadeRefFontSize / 28), 0.45, 4.8);
       ctxs.reply.lineCap = 'round';
       ctxs.reply.lineJoin = 'round';
       ctxs.reply.shadowColor = 'rgba(40, 22, 0, .16)';
