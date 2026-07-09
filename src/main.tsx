@@ -115,6 +115,7 @@ type Settings = {
 
 const SETTINGS_KEY = 'magic-diary-settings-v1';
 const PRESETS_KEY = 'magic-diary-presets-v1';
+const AI_ENDPOINTS_KEY = 'magic-diary-ai-endpoints-v1';
 const MODEL_OPTIONS_KEY = 'magic-diary-model-options-v1';
 const REVEAL_DELAY_KEY = 'magic-diary-reveal-delay';
 function loadDiagnosticsState() {
@@ -2020,6 +2021,49 @@ function App() {
     setStatus(`已载入预设：${name}`);
   }
 
+  function saveAiEndpoints() {
+    const name = window.prompt('接入配置名称');
+    if (!name) return;
+    const presets = JSON.parse(localStorage.getItem(AI_ENDPOINTS_KEY) || '{}');
+    presets[name] = {
+      primaryEndpointName: settings.ai.primaryEndpointName,
+      baseUrl: settings.ai.baseUrl,
+      apiKey: settings.ai.apiKey,
+      model: settings.ai.model,
+      replyModel: settings.ai.replyModel,
+      visionEndpointName: settings.ai.visionEndpointName,
+      visionBaseUrl: settings.ai.visionBaseUrl,
+      visionApiKey: settings.ai.visionApiKey,
+      visionModel: settings.ai.visionModel,
+      modelMode: settings.ai.modelMode,
+      replyPipeline: settings.ai.replyPipeline,
+    };
+    localStorage.setItem(AI_ENDPOINTS_KEY, JSON.stringify(presets));
+    setStatus(`已保存接入配置：${name}`);
+  }
+
+  function loadAiEndpoints() {
+    const presets = JSON.parse(localStorage.getItem(AI_ENDPOINTS_KEY) || '{}');
+    const names = Object.keys(presets);
+    const name = window.prompt(`输入要载入的接入配置：${names.join(' / ')}`);
+    if (!name || !presets[name]) return;
+    const preset = presets[name];
+    updateSettings((d) => {
+      d.ai.primaryEndpointName = preset.primaryEndpointName || d.ai.primaryEndpointName;
+      d.ai.baseUrl = preset.baseUrl || '';
+      d.ai.apiKey = preset.apiKey || '';
+      d.ai.model = preset.model || '';
+      d.ai.replyModel = preset.replyModel || '';
+      d.ai.visionEndpointName = preset.visionEndpointName || d.ai.visionEndpointName;
+      d.ai.visionBaseUrl = preset.visionBaseUrl || '';
+      d.ai.visionApiKey = preset.visionApiKey || '';
+      d.ai.visionModel = preset.visionModel || '';
+      d.ai.modelMode = preset.modelMode || d.ai.modelMode;
+      d.ai.replyPipeline = preset.replyPipeline || d.ai.replyPipeline;
+    });
+    setStatus(`已载入接入配置：${name}`);
+  }
+
   async function loadModelOptions() {
     try {
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
@@ -2200,6 +2244,8 @@ function App() {
           savePreset={savePreset}
           loadPreset={loadPreset}
           loadModelOptions={loadModelOptions}
+          saveAiEndpoints={saveAiEndpoints}
+          loadAiEndpoints={loadAiEndpoints}
           modelOptions={modelOptions}
           testAiConnection={testAiConnection}
           testLastCropRecognition={testLastCropRecognition}
@@ -2253,7 +2299,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -2291,6 +2337,8 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label="补充视觉接入 API Key"><input type="password" value={settings.ai.visionApiKey} onChange={(e) => updateSettings((d) => { d.ai.visionApiKey = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={loadModelOptions}>读取可用模型</button>
+            <button type="button" onClick={saveAiEndpoints}>保存接入</button>
+            <button type="button" onClick={loadAiEndpoints}>载入接入</button>
           </div>
           {modelOptions.length > 0 ? <p className="hint-text">已读取 {modelOptions.length} 个模型。下面直接点开下拉框选择。</p> : <p className="hint-text">还没读取模型时可手动填；读取后会变成下拉选择。</p>}
           <Field label="识别方式">
