@@ -728,6 +728,7 @@ function App() {
   const [activeThreadId, setActiveThreadIdState] = useState<string>(() => loadActiveThreadId());
   const diagnosticsEnabledRef = useRef(diagnostics.enabled);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [visionModelOptions, setVisionModelOptions] = useState<string[]>([]);
   const [scribbleText, setScribbleText] = useState('');
   const longPressTimerRef = useRef<number | null>(null);
   const replyDelayTimerRef = useRef<number | null>(null);
@@ -839,7 +840,13 @@ function App() {
     } catch {
       setModelOptions([]);
     }
-  }, [settings.ai.baseUrl]);
+    try {
+      const cachedVision = JSON.parse(localStorage.getItem(modelOptionsCacheKey(settings.ai.visionBaseUrl || settings.ai.baseUrl)) || '[]');
+      setVisionModelOptions(Array.isArray(cachedVision) ? cachedVision.filter((id) => typeof id === 'string') : []);
+    } catch {
+      setVisionModelOptions([]);
+    }
+  }, [settings.ai.baseUrl, settings.ai.visionBaseUrl]);
 
   useEffect(() => {
     const text = scribbleText.trim();
@@ -2064,32 +2071,53 @@ function App() {
     setStatus(`已载入接入配置：${name}`);
   }
 
+  async function loadModelOptionsFor(baseUrl: string, apiKey: string, assign: (ids: string[]) => void, label: string) {
+    if (!apiKey.trim()) throw new Error(`请先填写${label} API Key。`);
+    let res = await fetchWithRetry(aiProxyUrl('models'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl, apiKey }),
+    });
+    if (res.status === 404 || res.status === 405) {
+      const normalizedBase = baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+      res = await fetch(`${normalizedBase}/v1/models`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+    }
+    if (!res.ok) throw new Error(`${label}模型列表读取失败：HTTP ${res.status}`);
+    const data = await res.json();
+    const ids = (data?.data || []).map((m: any) => String(m.id || '')).filter(Boolean).sort();
+    assign(ids);
+    try { localStorage.setItem(modelOptionsCacheKey(baseUrl), JSON.stringify(ids)); } catch { /* ignore */ }
+    return ids;
+  }
+
   async function loadModelOptions() {
     try {
-      if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
-      let res = await fetchWithRetry(aiProxyUrl('models'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey }),
-      });
-      if (res.status === 404 || res.status === 405) {
-        res = await fetch(providerUrl('models'), {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${settings.ai.apiKey}` },
-        });
-      }
-      if (!res.ok) throw new Error(`模型列表读取失败：HTTP ${res.status}`);
-      const data = await res.json();
-      const ids = (data?.data || []).map((m: any) => String(m.id || '')).filter(Boolean).sort();
-      setModelOptions(ids);
-      try { localStorage.setItem(modelOptionsCacheKey(settings.ai.baseUrl), JSON.stringify(ids)); } catch { /* ignore */ }
-      setStatus(ids.length ? `已读取 ${ids.length} 个模型。` : '接口返回了模型列表，但没有可用模型名。');
+      const ids = await loadModelOptionsFor(settings.ai.baseUrl, settings.ai.apiKey, setModelOptions, settings.ai.primaryEndpointName || '主接入');
+      setStatus(ids.length ? `已读取主接入 ${ids.length} 个模型。` : '主接入返回了模型列表，但没有可用模型名。');
     } catch (error) {
       const message = error instanceof TypeError
-        ? '浏览器无法直连该接口，可能是服务商 CORS 限制；需要换支持浏览器直连的 Base URL，或接线上代理。'
+        ? '浏览器无法直连主接入，可能是服务商 CORS 限制；需要换支持浏览器直连的 Base URL，或接线上代理。'
         : error instanceof Error ? error.message : String(error);
       setModelOptions([]);
-      setStatus(`读取模型失败：${message.slice(0, 80)}`);
+      setStatus(`读取主接入模型失败：${message.slice(0, 80)}`);
+    }
+  }
+
+  async function loadVisionModelOptions() {
+    try {
+      const baseUrl = settings.ai.visionBaseUrl.trim() || settings.ai.baseUrl;
+      const apiKey = settings.ai.visionApiKey.trim() || settings.ai.apiKey;
+      const ids = await loadModelOptionsFor(baseUrl, apiKey, setVisionModelOptions, settings.ai.visionEndpointName || '补充视觉接入');
+      setStatus(ids.length ? `已读取补充视觉接入 ${ids.length} 个模型。` : '补充视觉接入返回了模型列表，但没有可用模型名。');
+    } catch (error) {
+      const message = error instanceof TypeError
+        ? '浏览器无法直连补充视觉接入，可能是服务商 CORS 限制；需要换支持浏览器直连的 Base URL，或接线上代理。'
+        : error instanceof Error ? error.message : String(error);
+      setVisionModelOptions([]);
+      setStatus(`读取补充视觉接入模型失败：${message.slice(0, 80)}`);
     }
   }
 
@@ -2244,9 +2272,11 @@ function App() {
           savePreset={savePreset}
           loadPreset={loadPreset}
           loadModelOptions={loadModelOptions}
+          loadVisionModelOptions={loadVisionModelOptions}
           saveAiEndpoints={saveAiEndpoints}
           loadAiEndpoints={loadAiEndpoints}
           modelOptions={modelOptions}
+          visionModelOptions={visionModelOptions}
           testAiConnection={testAiConnection}
           testLastCropRecognition={testLastCropRecognition}
           testPersonaReply={testPersonaReply}
@@ -2299,7 +2329,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, loadVisionModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, visionModelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; loadVisionModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: () => void; modelOptions: string[]; visionModelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -2336,11 +2366,14 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label="补充视觉接入 Base URL"><input value={settings.ai.visionBaseUrl} onChange={(e) => updateSettings((d) => { d.ai.visionBaseUrl = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <Field label="补充视觉接入 API Key"><input type="password" value={settings.ai.visionApiKey} onChange={(e) => updateSettings((d) => { d.ai.visionApiKey = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <div className="settings-actions inline-actions">
-            <button type="button" onClick={loadModelOptions}>读取可用模型</button>
+            <button type="button" onClick={loadModelOptions}>读取主接入模型</button>
+            <button type="button" onClick={loadVisionModelOptions}>读取补充视觉模型</button>
             <button type="button" onClick={saveAiEndpoints}>保存接入</button>
             <button type="button" onClick={loadAiEndpoints}>载入接入</button>
           </div>
-          {modelOptions.length > 0 ? <p className="hint-text">已读取 {modelOptions.length} 个模型。下面直接点开下拉框选择。</p> : <p className="hint-text">还没读取模型时可手动填；读取后会变成下拉选择。</p>}
+          {modelOptions.length > 0 || visionModelOptions.length > 0
+            ? <p className="hint-text">主接入模型 {modelOptions.length} 个；补充视觉模型 {visionModelOptions.length} 个。下面会分别用于主回复模型和补充视觉模型选择。</p>
+            : <p className="hint-text">还没读取模型时可手动填；读取后会变成下拉选择。主接入和补充视觉接入可以分别读取。</p>}
           <Field label="识别方式">
             <select value={settings.ai.recognitionMode} onChange={(e) => updateSettings((d) => { d.ai.recognitionMode = e.target.value as Settings['ai']['recognitionMode']; })}>
               <option value="vision">魔法纸模式：Canvas 墨迹 + AI 看图</option>
