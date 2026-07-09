@@ -1013,7 +1013,7 @@ function App() {
     return `${base}/v1/${path.replace(/^\/+/, '')}`;
   }
 
-  function recordHistoryEntry(inputText: string | undefined, reply: string, model?: string) {
+  function recordHistoryEntry(inputText: string | undefined, reply: string, model?: string, threadIdOverride?: string) {
     if (!reply.trim()) return;
     try {
       const entry = addHistoryEntry({
@@ -1022,7 +1022,7 @@ function App() {
         model: model || settings.ai.model,
         persona: settings.persona.presetId,
         replyLength: settings.persona.replyLength,
-        threadId: activeThreadId,
+        threadId: threadIdOverride || activeThreadId,
       });
       setHistoryEntries((entries) => [...entries, entry].slice(-50));
     } catch {
@@ -1041,7 +1041,7 @@ function App() {
     setScribbleText('');
     const reply = '你好，现在是新的开始';
     setDebugSample({ recognizedText: '/new', reply, model: settings.ai.enabled ? settings.ai.model : 'mock', at: new Date().toISOString() });
-    recordHistoryEntry('/new', reply, settings.ai.enabled ? settings.ai.model : 'mock');
+    recordHistoryEntry('/new', reply, settings.ai.enabled ? settings.ai.model : 'mock', threadId);
     return reply;
   }
 
