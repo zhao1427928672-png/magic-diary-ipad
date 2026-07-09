@@ -2285,6 +2285,7 @@ function App() {
           loadAiEndpoints={loadAiEndpoints}
           modelOptions={modelOptions}
           visionModelOptions={visionModelOptions}
+          aiEndpointPresetNames={aiEndpointPresetNames}
           testAiConnection={testAiConnection}
           testLastCropRecognition={testLastCropRecognition}
           testPersonaReply={testPersonaReply}
@@ -2337,7 +2338,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, loadVisionModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, visionModelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; loadVisionModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: () => void; modelOptions: string[]; visionModelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, loadVisionModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, visionModelOptions, aiEndpointPresetNames, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; loadVisionModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: (nameFromSelect?: string) => void; modelOptions: string[]; visionModelOptions: string[]; aiEndpointPresetNames: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -2377,7 +2378,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
             <button type="button" onClick={loadModelOptions}>读取主接入模型</button>
             <button type="button" onClick={loadVisionModelOptions}>读取补充视觉模型</button>
             <button type="button" onClick={saveAiEndpoints}>保存接入</button>
-            <button type="button" onClick={loadAiEndpoints}>载入接入</button>
+            <button type="button" onClick={() => loadAiEndpoints()}>载入接入</button>
           </div>
           {aiEndpointPresetNames.length > 0 && (
             <Field label="已保存接入配置">
