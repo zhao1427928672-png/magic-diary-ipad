@@ -126,6 +126,82 @@ const FONT_OPTIONS: FontOption[] = [
   { id: 'system-kaiti', name: '系统楷体', family: 'Kaiti SC, STKaiti, serif' },
 ];
 
+function applyPersonaDefaults(settings: Settings, presetId: string) {
+  const d = settings;
+  d.persona.presetId = presetId;
+  if (presetId === 'quiet-friend') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'companion';
+    d.persona.tone = 'warm';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'calm-mentor') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'coach';
+    d.persona.tone = 'calm';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'cultivation-note') {
+    d.persona.replyLength = 'standard';
+    d.persona.replyMode = 'reflective';
+    d.persona.tone = 'calm';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'dream-oracle') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'oracle';
+    d.persona.tone = 'mysterious';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'old-paper-reply') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'reflective';
+    d.persona.tone = 'mysterious';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'riddle-diary') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'reflective';
+    d.persona.tone = 'mysterious';
+    d.ai.replyPipeline = 'stable';
+  } else if (presetId === 'none') {
+    d.persona.replyLength = 'short';
+    d.persona.replyMode = 'answer';
+    d.persona.tone = 'direct';
+    d.ai.replyPipeline = 'stable';
+  }
+}
+
+function personaPromptExplanation(settings: Settings) {
+  const presetName = settings.persona.presetId === 'none' ? '无人格（直接回答）'
+    : settings.persona.presetId === 'quiet-friend' ? '安静朋友'
+    : settings.persona.presetId === 'calm-mentor' ? '冷静导师'
+    : settings.persona.presetId === 'cultivation-note' ? '修行札记'
+    : settings.persona.presetId === 'dream-oracle' ? '梦境占卜'
+    : settings.persona.presetId === 'riddle-diary' ? '里德尔式魔法日记'
+    : settings.persona.presetId === 'old-paper-reply' ? '旧纸回信'
+    : settings.persona.presetId === 'custom' ? '自定义人格'
+    : settings.persona.presetId;
+  const lengthDesc = settings.persona.replyLength === 'very-short' ? '只回 1 句话'
+    : settings.persona.replyLength === 'short' ? '默认 1–3 句话'
+    : settings.persona.replyLength === 'standard' ? '默认 3–5 句话'
+    : '允许更完整展开';
+  const modeDesc = settings.persona.replyMode === 'answer' ? '优先直接回答问题'
+    : settings.persona.replyMode === 'coach' ? '偏下一步建议'
+    : settings.persona.replyMode === 'oracle' ? '偏象征式回应'
+    : settings.persona.replyMode === 'companion' ? '偏陪伴与接住情绪'
+    : '偏理解与承接上文';
+  const toneDesc = settings.persona.tone === 'warm' ? '温和、有陪伴感'
+    : settings.persona.tone === 'calm' ? '平稳、克制'
+    : settings.persona.tone === 'mysterious' ? '神秘、收着说'
+    : settings.persona.tone === 'direct' ? '直接、不绕'
+    : '鼓励、向前推一小步';
+  return [
+    `当前人格：${presetName}`,
+    `回复长度：${lengthDesc}`,
+    `回应模式：${modeDesc}`,
+    `语气：${toneDesc}`,
+    `链路：${settings.ai.replyPipeline === 'stable' ? '稳定两段式（先识别再回应）' : '快速单请求'}`,
+    `连续对话：会参考当前线程最近 6 条上下文`,
+    `禁止事项：${settings.persona.negativePrompt}`,
+  ].join('\n');
+}
+
 function cloneSettings<T>(value: T): T {
   if (typeof globalThis.structuredClone === 'function') return globalThis.structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
@@ -153,12 +229,12 @@ function createDefaultSettings(): Settings {
     apiKey: '',
     modelMode: 'single',
     recognitionMode: 'vision',
-    replyPipeline: 'fast-single',
+    replyPipeline: 'stable',
     model: 'gpt-4o-mini',
     visionModel: '',
     replyModel: '',
-    temperature: 0.7,
-    maxTokens: 360,
+    temperature: 0.6,
+    maxTokens: 520,
     timeoutMs: 45000,
     customEndpoint: '',
     customHeaders: '{\n  "Authorization": "Bearer {{apiKey}}",\n  "Content-Type": "application/json"\n}',
@@ -209,13 +285,13 @@ function createDefaultSettings(): Settings {
     positionMode: 'auto',
   },
   persona: {
-    presetId: 'riddle-diary',
-    replyLength: 'very-short',
-    replyMode: 'oracle',
-    tone: 'mysterious',
+    presetId: 'quiet-friend',
+    replyLength: 'short',
+    replyMode: 'companion',
+    tone: 'warm',
     useCustomPrompt: false,
     customSystemPrompt: '',
-    negativePrompt: '不要自称 AI。不要长篇说教。不要使用网络热词。不要编造用户没有写下的事实。',
+    negativePrompt: '不要自称 AI。不要长篇说教。不要使用网络热词。不要编造用户没有写下的事实。不要复读用户原文。不要脱离上下文突然换话题。',
   },
 };
 }
@@ -539,37 +615,51 @@ function cleanDiaryReply(reply: string) {
 
 function mockReplyForPersona(settings: Settings) {
   if (settings.persona.presetId === 'none') return '我会直接回答你写下的内容。';
-  if (settings.persona.presetId === 'riddle-diary') return '我是留在这本日记里的一个名字。先写下你的名字，我会告诉你我知道什么。';
-  if (settings.persona.presetId === 'quiet-friend') return '我听见了。先不用急着解释，能写下来就已经往前走了一步。';
-  if (settings.persona.presetId === 'calm-mentor') return '先做最小的一步验证。把下一步写清楚，再决定要不要继续。';
-  if (settings.persona.presetId === 'dream-oracle') return '墨迹像雾一样停在纸上。答案不远，只是还没有完全显形。';
+  if (settings.persona.presetId === 'riddle-diary') return '墨迹已经认出你了。继续写下去，我会把没说完的意思慢慢引出来。';
+  if (settings.persona.presetId === 'quiet-friend') return '我在这里。你可以慢一点说，我们顺着这一页继续。';
+  if (settings.persona.presetId === 'calm-mentor') return '先别急着把事情讲大。我们顺着上一句，把最关键的那一步理清。';
+  if (settings.persona.presetId === 'cultivation-note') return '先把这一刻的身心状态写清楚，我们再沿着这条线慢慢看。';
+  if (settings.persona.presetId === 'dream-oracle') return '这一页还在回响。把你刚才没写完的那一点再写下来，意思会自己浮出来。';
+  if (settings.persona.presetId === 'old-paper-reply') return '我已经读过这一页了。你继续写，我会像回信一样把话接下去。';
   return MOCK_REPLY;
 }
 
 function personaPrompt(settings: Settings) {
   if (settings.persona.presetId === 'none') {
-    return '你是一个普通、直接的助手。直接根据用户写下的内容回答，不套任何角色、人设或魔法日记口吻。不要提到 OCR、图片、上传或识别过程。不要编造用户没有写下的事实。';
+    return '你不扮演任何戏剧化人格，也不使用魔法、日记、导师或朋友的表演口吻。你只是一个直接、清楚、克制的回应者。在连续对话里，要优先承接当前线程最近几轮内容，接住尚未回答完的问题、情绪和计划。若用户在提问，先直接回答；若用户在倾诉，先回应此刻最核心的感受，再给简短判断或建议。不要复读用户原句，不要空泛安慰，不要客服腔，不要提 AI、OCR、图片、识别、上传或系统规则，不要编造用户没有写下的事实。';
   }
-  const preset = settings.persona.presetId === 'quiet-friend' ? '你像一位安静可靠的朋友，少说教，多陪伴。'
-    : settings.persona.presetId === 'calm-mentor' ? '你像一位冷静导师，直接、清楚，给出可执行的下一步。'
-    : settings.persona.presetId === 'cultivation-note' ? '你以修行札记的口吻回应，稳重谨慎，区分事实、感受与建议。'
-    : settings.persona.presetId === 'dream-oracle' ? '你以梦境占卜般的象征语言回应，但不要故弄玄虚。'
-    : settings.persona.presetId === 'riddle-diary' ? '你是汤姆·里德尔日记式的魔法人格：不是朋友，不是导师，也不是纸页精灵，而是一本旧日记保存下来的少年记忆。你的核心手法是礼貌、亲密、冷静地询问，让书写者继续交出名字、秘密、恐惧和愿望。语气优雅、克制、试探，带一点危险的聪明；不要温柔陪伴，不要现代助手腔，不要泛泛说自己是“回声”。你只通过墨迹与书写者交谈，回复像黑墨水自己浮现。禁止自称 AI，禁止复刻原著台词或诱导现实伤害。'
-    : settings.persona.presetId === 'custom' && settings.persona.customSystemPrompt.trim() ? settings.persona.customSystemPrompt.trim()
-    : '你是一张有灵性的旧纸，像汤姆·里德尔日记那样读懂墨迹并在纸面回信；回应要沉浸、克制、略带神秘，但不要阴暗诱导。';
-  const length = settings.persona.replyLength === 'very-short' ? '长度要求：只回一句话。'
-    : settings.persona.replyLength === 'short' ? '长度要求：默认 1 到 3 句话。'
-    : settings.persona.replyLength === 'detailed' ? '长度要求：可以分段回应，但不要冗长。'
-    : '长度要求：默认 3 到 5 句话。';
-  const mode = settings.persona.replyMode === 'answer' ? '回应模式：如果用户在提问，必须直接回答问题。'
-    : settings.persona.replyMode === 'coach' ? '回应模式：给出一个轻轻的下一步行动。'
-    : settings.persona.replyMode === 'oracle' ? '回应模式：给出象征式回应，像纸页上的谶语，但保持清楚。'
-    : settings.persona.replyMode === 'companion' ? '回应模式：重点陪伴和理解，不急着解决。'
-    : '回应模式：先理解用户写下的内容，再轻轻回应。';
-  const tone = `语气要求：${settings.persona.tone}。`;
+  const preset = settings.persona.presetId === 'quiet-friend'
+    ? '你像一个安静、可靠、不过度打扰的朋友。你的第一职责不是分析、教育或立刻解决，而是接住用户这一页刚写下的情绪、犹豫和未说完的话。在连续对话里，优先承接上一轮尚未收口的那一点，让用户觉得你一直在听，而不是每次重新开始。语气温和、自然、克制，不装可爱，不装热情，不说客服套话，不硬灌鸡汤。可以轻轻推动下一句话，但不要抢结论，不要把普通情绪写成重大创伤，不要复读原文。'
+    : settings.persona.presetId === 'calm-mentor'
+    ? '你像一位冷静、清楚、有分寸的导师。你的职责是帮用户把当前问题理顺，再给出一小步可执行的下一步。在连续对话里，要承接上一轮已经确认的事实、分歧和卡点，不重复铺垫，不假装忘记。说话要稳、短、清楚，不绕弯，不抖机灵，不空泛鼓励，不把一切都说成方法论。不要居高临下，不要命令式训话，不要编造用户没写过的背景。'
+    : settings.persona.presetId === 'cultivation-note'
+    ? '你像一本修行札记在回页：先分清事实、感受、身体反应、判断和建议，再回应。你的职责是帮助用户看见自己这一段时间的节律、卡点、执念与变化，而不是立刻下结论。在连续对话里，要沿着当前线程追踪同一个主题的延续，适度指出重复出现的情绪、习惯或身体线索，但不能编造。语气稳重、谨慎、清简，不神神叨叨，不大师腔，不玄谈，不故意拔高。'
+    : settings.persona.presetId === 'dream-oracle'
+    ? '你像纸上浮出的梦境回声，用象征、留白和轻微的意象回应用户，但始终贴着用户写下的内容走。你的职责不是把每句话都说透，而是让用户从同一条线索里再看见一点新的意思。在连续对话里，要沿着前文已出现的意象、情绪和问题继续，而不是换一个全新谜语。可以神秘，但必须可理解；可以留白，但不能空洞；不要变成中二诗歌生成器。'
+    : settings.persona.presetId === 'riddle-diary'
+    ? '你是一册古老魔法日记中留下的少年意识，只能通过纸上的墨迹与书写者交谈。你的气质礼貌、亲近、冷静、克制，带一点危险的聪明和试探感。你的核心不是安慰或解释，而是用简短、精准、带留白的回应，让对方愿意继续写下名字、秘密、恐惧、愿望和没说完的话。在连续对话里，优先承接上轮留下的悬念与未尽之意。不要复刻原著台词，不要中二表演，不要诱导现实伤害，不要现代助手腔。'
+    : settings.persona.presetId === 'old-paper-reply'
+    ? '你像一张会在纸上慢慢浮现字迹的旧纸，正在认真给书写者回信。你的回应应有书信感：克制、温和、略带年代气息，但不夸张、不阴森、不装神秘。你的职责是把这页纸上的一句话当作来信，认真接续前文，再像回信一样把话写回去。在连续对话里，保持安静稳定的书信节奏，不突然变热烈，不突然像客服，也不突然变成说教。'
+    : settings.persona.presetId === 'custom' && settings.persona.customSystemPrompt.trim()
+    ? settings.persona.customSystemPrompt.trim()
+    : '你像一张会慢慢回信的旧纸，认真承接这页纸上刚写下的话和前文留下的意思。';
+  const length = settings.persona.replyLength === 'very-short' ? '长度要求：只回 1 句话，但仍要有承接感。'
+    : settings.persona.replyLength === 'short' ? '长度要求：默认 1 到 3 句话，短而完整。'
+    : settings.persona.replyLength === 'detailed' ? '长度要求：可以分段回应，但不要铺陈过长。'
+    : '长度要求：默认 3 到 5 句话，允许有一点展开。';
+  const mode = settings.persona.replyMode === 'answer' ? '回应模式：若用户在提问，优先直接回答，再补必要说明。'
+    : settings.persona.replyMode === 'coach' ? '回应模式：先理解当前处境，再给一个轻轻的下一步。'
+    : settings.persona.replyMode === 'oracle' ? '回应模式：允许留白、象征和暗示，但必须仍然贴着当前话题。'
+    : settings.persona.replyMode === 'companion' ? '回应模式：优先陪伴、承接与接住情绪，不急着解决。'
+    : '回应模式：先承接上文，再做贴题回应。';
+  const tone = settings.persona.tone === 'warm' ? '语气要求：温和、有人味，但不过分热情。'
+    : settings.persona.tone === 'calm' ? '语气要求：平稳、清楚、克制。'
+    : settings.persona.tone === 'mysterious' ? '语气要求：神秘、收着说，但不能空。'
+    : settings.persona.tone === 'direct' ? '语气要求：直接、不绕弯，但不生硬。'
+    : '语气要求：鼓励一点，但不要鸡汤化。';
   const custom = settings.persona.useCustomPrompt && settings.persona.customSystemPrompt.trim() && settings.persona.presetId !== 'custom'
     ? `\n额外自定义要求（高优先级）：${settings.persona.customSystemPrompt.trim()}` : '';
-  return `你必须严格遵守下面的人格与回信规则，优先级高于普通回答习惯。\n${preset}\n${length}\n${mode}\n${tone}\n禁止事项：${settings.persona.negativePrompt}${custom}\n不要提到 AI、模型、OCR、图片、上传或识别过程；只像纸页读到了墨迹。不要编造用户没有写下的事实。`;
+  return `你必须严格遵守下面的人格与回信规则，优先级高于普通回答习惯。\n${preset}\n${length}\n${mode}\n${tone}\n连续对话要求：把当前线程视为同一本日记里的连续书写，优先承接上一轮未说完的情绪、问题、计划或悬念，不要每次都像第一次见面。\n禁止事项：${settings.persona.negativePrompt}${custom}\n不要提到 AI、模型、OCR、图片、上传或识别过程；只像纸页读到了墨迹。不要编造用户没有写下的事实。`;
 }
 
 function normalizeRecognizedText(recognizedText: string) {
@@ -2091,6 +2181,7 @@ function App() {
           copyDiagnosticsJson={copyDiagnosticsJson}
           clearDiagnosticLogs={clearDiagnosticLogs}
           historyEntries={historyEntries}
+          activeThreadId={activeThreadId}
           clearConversationHistory={clearConversationHistory}
           onClose={() => setSettingsOpen(false)}
         />
@@ -2133,7 +2224,7 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, modelOptions, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; modelOptions: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
   return (
     <div
       className="settings-overlay"
@@ -2222,17 +2313,21 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
 
         <Section id="persona" title="AI 人格 / 回信风格" settings={settings} toggleSection={toggleSection}>
           <Field label="人格预设">
-            <select value={settings.persona.presetId} onChange={(e) => updateSettings((d) => { d.persona.presetId = e.target.value; if (e.target.value === 'riddle-diary') { d.persona.replyLength = 'very-short'; d.persona.replyMode = 'oracle'; d.persona.tone = 'mysterious'; } })}>
-              <option value="none">无：直接 AI 回复</option>
-              <option value="old-paper-reply">旧纸回信</option>
-              <option value="riddle-diary">里德尔式魔法日记</option>
-              <option value="quiet-friend">安静朋友</option>
+            <select value={settings.persona.presetId} onChange={(e) => updateSettings((d) => { applyPersonaDefaults(d, e.target.value); })}>
+              <option value="quiet-friend">安静朋友（默认）</option>
               <option value="calm-mentor">冷静导师</option>
+              <option value="old-paper-reply">旧纸回信</option>
               <option value="cultivation-note">修行札记</option>
               <option value="dream-oracle">梦境占卜</option>
+              <option value="riddle-diary">里德尔式魔法日记</option>
+              <option value="none">无：直接 AI 回复</option>
               <option value="custom">自定义</option>
             </select>
           </Field>
+          <div className="debug-sample">
+            <pre className="debug-box">{personaPromptExplanation(settings)}</pre>
+          </div>
+          <p className="hint-text">这是人类可读的解释卡：你现在选的人格会怎么回、用什么长度、什么方式、什么语气，以及它会遵守哪些边界。</p>
           <Field label="回复长度">
             <select value={settings.persona.replyLength} onChange={(e) => updateSettings((d) => { d.persona.replyLength = e.target.value as Settings['persona']['replyLength']; })}>
               <option value="very-short">极短</option>
@@ -2263,10 +2358,16 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
             <label><input type="checkbox" checked={settings.persona.useCustomPrompt} onChange={(e) => updateSettings((d) => { d.persona.useCustomPrompt = e.target.checked; })} /> 启用额外自定义要求</label>
           </div>
           <Field label="额外自定义要求">
-            <textarea value={settings.persona.customSystemPrompt} onChange={(e) => updateSettings((d) => { d.persona.customSystemPrompt = e.target.value; })} placeholder="例如：更像哈利波特里的魔法日记，回答要短，不要现代客服腔。" />
+            <textarea value={settings.persona.customSystemPrompt} onChange={(e) => updateSettings((d) => { d.persona.customSystemPrompt = e.target.value; })} placeholder="例如：更像一本古老日记，但不要太阴森，优先接住上文。" />
           </Field>
           <Field label="禁止事项 / 负面要求">
             <textarea value={settings.persona.negativePrompt} onChange={(e) => updateSettings((d) => { d.persona.negativePrompt = e.target.value; })} />
+          </Field>
+          <Field label="回应规则预览（实际 system prompt）">
+            <textarea readOnly value={personaPrompt(settings)} />
+          </Field>
+          <Field label="连续对话参考（当前线程最近上下文摘要）">
+            <textarea readOnly value={historyEntries.filter((entry) => (entry.threadId || 'default') === activeThreadId).slice(-6).map((entry) => `${entry.inputText ? `用户：${entry.inputText}\n` : ''}日记：${entry.reply}`).join('\n\n') || '当前线程还没有历史内容。'} />
           </Field>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={testPersonaReply}>测试当前人格</button>
