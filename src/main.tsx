@@ -2102,9 +2102,10 @@ function App() {
   function clearConversationHistory() {
     if (!window.confirm('清空历史记录？这只会删除本地历史，不会删除设置里的 API Key。')) return;
     clearHistory();
+    setThread('default');
     setHistoryEntries([]);
     setDebugSample(null);
-    setStatus('历史记录已清空，最近裁剪调试图也已清除。');
+    setStatus('历史记录已清空，当前对话线也已重置。');
   }
 
   return (
