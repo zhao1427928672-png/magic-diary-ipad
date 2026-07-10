@@ -2289,19 +2289,12 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <div className="check-row">
             <label><input type="checkbox" checked={settings.ai.enabled} onChange={(e) => updateSettings((d) => { d.ai.enabled = e.target.checked; })} /> 启用真实 AI 回信</label>
           </div>
-          <Field label="接口类型">
-            <select value={settings.ai.adapter} onChange={(e) => updateSettings((d) => { d.ai.adapter = e.target.value as Settings['ai']['adapter']; })}>
-              <option value="openai-compatible">OpenAI 兼容接口</option>
-              <option value="custom-http">自定义 HTTP</option>
-            </select>
-          </Field>
           <Field label="主接入 Base URL"><input value={settings.ai.baseUrl} onChange={(e) => updateSettings((d) => { d.ai.baseUrl = e.target.value; })} placeholder="https://api.openai.com" /></Field>
           <Field label="主接入 API Key"><input type="password" value={settings.ai.apiKey} onChange={(e) => updateSettings((d) => { d.ai.apiKey = e.target.value; })} placeholder="仅保存在当前浏览器" /></Field>
           <Field label="补充视觉接入 Base URL"><input value={settings.ai.visionBaseUrl} onChange={(e) => updateSettings((d) => { d.ai.visionBaseUrl = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <Field label="补充视觉接入 API Key"><input type="password" value={settings.ai.visionApiKey} onChange={(e) => updateSettings((d) => { d.ai.visionApiKey = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <div className="settings-actions inline-actions">
-            <button type="button" onClick={loadModelOptions}>读取主接入模型</button>
-            <button type="button" onClick={loadVisionModelOptions}>读取补充视觉模型</button>
+            <button type="button" onClick={async () => { await loadModelOptions(); await loadVisionModelOptions(); }}>读取模型</button>
             <button type="button" onClick={saveAiEndpoints}>保存接入</button>
             <button type="button" onClick={() => loadAiEndpoints()}>载入接入</button>
           </div>
@@ -2319,30 +2312,28 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label="识别方式">
             <select value={settings.ai.recognitionMode} onChange={(e) => updateSettings((d) => { d.ai.recognitionMode = e.target.value as Settings['ai']['recognitionMode']; })}>
               <option value="vision">魔法纸模式：Canvas 墨迹 + AI 看图</option>
-              <option value="scribble-first">随手写识别模式：隐形纸面输入层 + iPad 转文字</option>
-              <option value="scribble-only">纯随手写模式：只用 iPad 转文字</option>
+              <option value="scribble">随手写识别模式：只用 iPad 转文字</option>
             </select>
           </Field>
-          <Field label="回信链路">
+          <Field label="处理模式">
             <select value={settings.ai.replyPipeline} onChange={(e) => updateSettings((d) => { d.ai.replyPipeline = e.target.value as Settings['ai']['replyPipeline']; })}>
               <option value="stable">稳定两段式：先识字，再回信</option>
               <option value="fast-single">快速单请求：图片直接回信</option>
             </select>
           </Field>
-          <Field label="模型分工方式">
-            <select value={settings.ai.modelMode} onChange={(e) => updateSettings((d) => { d.ai.modelMode = e.target.value as Settings['ai']['modelMode']; })}>
-              <option value="single">单模型：识字 + 回信都用主模型</option>
-              <option value="split">分工模式：补充视觉模型识字，主回复模型回信</option>
-            </select>
-          </Field>
-          <p className="hint-text">如果主模型没有视觉识别能力，就用这里的“分工模式”：让补充视觉模型先读图识字，再由主回复模型负责真正回信。</p>
+          <p className="hint-text">如果主模型没有视觉识别能力，开启“分工模式”：让补充视觉模型先读图识字，再由主回复模型负责真正回信。</p>
           <ModelPicker label="主回复模型" value={settings.ai.model} options={modelOptions} fallback="gpt-4o-mini" onChange={(value) => updateSettings((d) => { d.ai.model = value; })} />
           <ModelPicker label="补充视觉模型（先识字）" value={settings.ai.visionModel} options={visionModelOptions} fallback="可留空使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.visionModel = value; })} />
-          <ModelPicker label="补充回复模型（可留空）" value={settings.ai.replyModel} options={modelOptions} fallback="留空：使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.replyModel = value; })} />
-          <Field label={`创造性 ${settings.ai.temperature.toFixed(2)}`}><input type="range" min="0" max="2" step="0.05" value={settings.ai.temperature} onChange={(e) => updateSettings((d) => { d.ai.temperature = Number(e.target.value); })} /></Field>
-          <Field label={`最大输出 ${settings.ai.maxTokens}`}><input type="range" min="80" max="4000" step="20" value={settings.ai.maxTokens} onChange={(e) => updateSettings((d) => { d.ai.maxTokens = Number(e.target.value); })} /></Field>
-          <Field label={`裁剪留白 ${settings.ai.visionImage.padding}px`}><input type="range" min="0" max="160" value={settings.ai.visionImage.padding} onChange={(e) => updateSettings((d) => { d.ai.visionImage.padding = Number(e.target.value); })} /></Field>
-          <Field label={`图片尺寸上限 ${settings.ai.visionImage.maxSize}px`}><input type="range" min="256" max="2048" step="64" value={settings.ai.visionImage.maxSize} onChange={(e) => updateSettings((d) => { d.ai.visionImage.maxSize = Number(e.target.value); })} /></Field>
+          <Field label="创造性">
+            <select value={settings.ai.temperature} onChange={(e) => updateSettings((d) => { d.ai.temperature = Number(e.target.value); })}>
+              <option value="0">低（确定）</option>
+              <option value="0.3">较低</option>
+              <option value="0.7">中（默认）</option>
+              <option value="1">高</option>
+              <option value="1.5">很高</option>
+            </select>
+          </Field>
+          <Field label="最大输出"><input type="range" min="80" max="4000" step="20" value={settings.ai.maxTokens} onChange={(e) => updateSettings((d) => { d.ai.maxTokens = Number(e.target.value); })} /></Field>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={testAiConnection}>测试 AI 连接</button>
             <button type="button" onClick={testLastCropRecognition}>识别最近裁剪图</button>
@@ -2408,39 +2399,37 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
 
         <Section id="font" title="字体与文字" settings={settings} toggleSection={toggleSection}>
           <Field label="字体">
-            <select value={settings.font.selectedFontId} onChange={(e) => updateSettings((d) => { d.font.selectedFontId = e.target.value; })}>
-              {FONT_OPTIONS.map((font) => <option key={font.id} value={font.id}>{font.name}</option>)}
-            </select>
-          </Field>
-          <Field label="字号档位">
-            <select value={settings.font.sizePreset} onChange={(e) => updateSettings((d) => { d.font.sizePreset = e.target.value as Settings['font']['sizePreset']; })}>
-              <option value="small">小</option><option value="medium">中</option><option value="large">大</option><option value="custom">自定义</option>
-            </select>
+            <select value={settings.font.selectedFontId} onChange={(e) => updateSettings((d) => { d.font.selectedFontId = e.target.value; })}>{FONT_OPTIONS.map((font) => <option key={font.id} value={font.id}>{font.name}</option>)}</select>
           </Field>
           <Field label={`字号 ${settings.font.fontSizePx}px`}><input type="range" min="16" max="96" value={settings.font.fontSizePx} onChange={(e) => updateSettings((d) => { d.font.fontSizePx = Number(e.target.value); d.font.sizePreset = 'custom'; })} /></Field>
-          <Field label={`行距 ${settings.font.lineHeight.toFixed(2)}`}><input type="range" min="1.1" max="2.2" step="0.05" value={settings.font.lineHeight} onChange={(e) => updateSettings((d) => { d.font.lineHeight = Number(e.target.value); })} /></Field>
-          <Field label="墨色"><input type="color" value={settings.font.inkColor} onChange={(e) => updateSettings((d) => { d.font.inkColor = e.target.value; })} /></Field>
-          <Field label={`墨色透明 ${settings.font.inkOpacity.toFixed(2)}`}><input type="range" min="0.2" max="1" step="0.05" value={settings.font.inkOpacity} onChange={(e) => updateSettings((d) => { d.font.inkOpacity = Number(e.target.value); })} /></Field>
-          <Field label={`回信笔粗细 ${settings.font.strokeWidth.toFixed(2)}`}><input type="range" min="1.2" max="4.8" step="0.1" value={settings.font.strokeWidth} onChange={(e) => updateSettings((d) => { d.font.strokeWidth = Number(e.target.value); })} /></Field>
-          <Field label={`阴影 ${settings.font.shadowStrength.toFixed(1)}`}><input type="range" min="0" max="8" step="0.2" value={settings.font.shadowStrength} onChange={(e) => updateSettings((d) => { d.font.shadowStrength = Number(e.target.value); })} /></Field>
-          <Field label={`最大行宽 ${settings.font.maxWidth}px`}><input type="range" min="280" max="900" value={settings.font.maxWidth} onChange={(e) => updateSettings((d) => { d.font.maxWidth = Number(e.target.value); })} /></Field>
+          <Field label="高级字体">
+            <details><summary>展开高级字体设置</summary>
+            <div style={{display:'grid', gap:'8px', marginTop:'8px'}}>
+            <Field label={`行距 ${settings.font.lineHeight.toFixed(2)}`}><input type="range" min="1.1" max="2.2" step="0.05" value={settings.font.lineHeight} onChange={(e) => updateSettings((d) => { d.font.lineHeight = Number(e.target.value); })} /></Field>
+            <Field label="墨色"><input type="color" value={settings.font.inkColor} onChange={(e) => updateSettings((d) => { d.font.inkColor = e.target.value; })} /></Field>
+            <Field label={`墨色透明 ${settings.font.inkOpacity.toFixed(2)}`}><input type="range" min="0.2" max="1" step="0.05" value={settings.font.inkOpacity} onChange={(e) => updateSettings((d) => { d.font.inkOpacity = Number(e.target.value); })} /></Field>
+            <Field label={`回信笔粗细 ${settings.font.strokeWidth.toFixed(2)}`}><input type="range" min="1.2" max="4.8" step="0.1" value={settings.font.strokeWidth} onChange={(e) => updateSettings((d) => { d.font.strokeWidth = Number(e.target.value); })} /></Field>
+            <Field label={`阴影 ${settings.font.shadowStrength.toFixed(1)}`}><input type="range" min="0" max="8" step="0.2" value={settings.font.shadowStrength} onChange={(e) => updateSettings((d) => { d.font.shadowStrength = Number(e.target.value); })} /></Field>
+            <Field label={`最大行宽 ${settings.font.maxWidth}px`}><input type="range" min="280" max="900" value={settings.font.maxWidth} onChange={(e) => updateSettings((d) => { d.font.maxWidth = Number(e.target.value); })} /></Field>
+            </div>
+            </details>
+          </Field>
         </Section>
 
         <Section id="animation" title="动画效果" settings={settings} toggleSection={toggleSection}>
-          <p className="hint-text">这里主要控制三段：用户手写墨迹怎么退场、AI 回信怎么写出来、AI 回信停留多久后再淡掉。最近为了接近官方效果，部分动画会按笔画长度自动延长，所以不是每个滑轨都线性生效。</p>
-          <Field label="动画速度">
-            <select value={settings.animation.speedPreset} onChange={(e) => updateSettings((d) => { const v = e.target.value as Settings['animation']['speedPreset']; d.animation.speedPreset = v; if (v === 'fast') { d.animation.handwritingFadeMs = 800; d.animation.replyFadeInMs = 650; } else if (v === 'standard') { d.animation.handwritingFadeMs = 1100; d.animation.replyFadeInMs = 1000; } else if (v === 'slow') { d.animation.handwritingFadeMs = 1600; d.animation.replyFadeInMs = 1800; } })}>
-              <option value="fast">快</option><option value="standard">标准</option><option value="slow">慢</option><option value="custom">自定义</option>
-            </select>
-          </Field>
-          <Field label={`手写消失 ${settings.animation.handwritingFadeMs}ms（用户写的墨迹被纸吸走的速度）`}><input type="range" min="450" max="2500" step="50" value={settings.animation.handwritingFadeMs} onChange={(e) => updateSettings((d) => { d.animation.handwritingFadeMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
-          <Field label={`回复淡入 ${settings.animation.replyFadeInMs}ms（AI 回信开始写出的最短时长；长句会按笔画自动更久）`}><input type="range" min="400" max="4200" step="50" value={settings.animation.replyFadeInMs} onChange={(e) => updateSettings((d) => { d.animation.replyFadeInMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
-          <Field label={`停留最短 ${settings.animation.replyLingerMinMs}ms（回信写完后至少停多久）`}><input type="range" min="200" max="9000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); })} /></Field>
-          <Field label={`停留最长 ${settings.animation.replyLingerMaxMs}ms（长回复最多停多久）`}><input type="range" min="600" max="12000" step="50" value={settings.animation.replyLingerMaxMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMaxMs = Number(e.target.value); })} /></Field>
-          <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms（回信每多一行额外多停一会）`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
-          <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms（每个字自己淡掉的时长）`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
-          <p className="hint-text">已隐藏旧的兼容参数（例如行间延迟、整体淡出阈值）。当前主要就是上面这 5 个参数在决定你实际看到的效果。</p>
-        </Section>
+                  <p className="hint-text">这里主要控制三段：用户手写墨迹怎么退场、AI 回信怎么写出来、AI 回信停留多久后再淡掉。最近为了接近官方效果，部分动画会按笔画长度自动延长，所以不是每个滑轨都线性生效。</p>
+                  <Field label="动画速度">
+                    <select value={settings.animation.speedPreset} onChange={(e) => updateSettings((d) => { const v = e.target.value as Settings['animation']['speedPreset']; d.animation.speedPreset = v; if (v === 'fast') { d.animation.handwritingFadeMs = 800; d.animation.replyFadeInMs = 650; } else if (v === 'standard') { d.animation.handwritingFadeMs = 1100; d.animation.replyFadeInMs = 1000; } else if (v === 'slow') { d.animation.handwritingFadeMs = 1600; d.animation.replyFadeInMs = 1800; } })} >
+                      <option value="fast">快</option><option value="standard">标准</option><option value="slow">慢</option><option value="custom">自定义</option>
+                    </select>
+                  </Field>
+                  <Field label={`手写消失 ${settings.animation.handwritingFadeMs}ms（用户写的墨迹被纸吸走的速度）`}><input type="range" min="450" max="2500" step="50" value={settings.animation.handwritingFadeMs} onChange={(e) => updateSettings((d) => { d.animation.handwritingFadeMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
+                  <Field label={`回复淡入 ${settings.animation.replyFadeInMs}ms（AI 回信开始写出的最短时长；长句会按笔画自动更久）`}><input type="range" min="400" max="4200" step="50" value={settings.animation.replyFadeInMs} onChange={(e) => updateSettings((d) => { d.animation.replyFadeInMs = Number(e.target.value); d.animation.speedPreset = 'custom'; })} /></Field>
+                  <Field label={`回复停留 ${settings.animation.replyLingerMinMs}–${settings.animation.replyLingerMaxMs}ms（回信写完后停留时长；长回复会自动取更长值）`}><input type="range" min="200" max="12000" step="50" value={settings.animation.replyLingerMinMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerMinMs = Number(e.target.value); d.animation.replyLingerMaxMs = Math.max(d.animation.replyLingerMaxMs, Number(e.target.value)); })} /></Field>
+                  <Field label={`每行停留增量 ${settings.animation.replyLingerPerLineMs}ms（回信每多一行额外多停一会）`}><input type="range" min="0" max="1600" step="20" value={settings.animation.replyLingerPerLineMs} onChange={(e) => updateSettings((d) => { d.animation.replyLingerPerLineMs = Number(e.target.value); })} /></Field>
+                  <Field label={`行淡出 ${settings.animation.replyLineFadeMs}ms（每个字自己淡掉的时长）`}><input type="range" min="500" max="5000" step="50" value={settings.animation.replyLineFadeMs} onChange={(e) => updateSettings((d) => { d.animation.replyLineFadeMs = Number(e.target.value); })} /></Field>
+                  <p className="hint-text">已隐藏旧的兼容参数。当前主要就是上面这几个参数在决定你实际看到的效果。</p>
+                </Section>
 
         <Section id="input" title="手写输入" settings={settings} toggleSection={toggleSection}>
           <Field label="停笔触发">
