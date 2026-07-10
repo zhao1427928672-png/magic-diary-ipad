@@ -2295,10 +2295,8 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
               <option value="custom-http">自定义 HTTP</option>
             </select>
           </Field>
-          <Field label="主接入名称"><input value={settings.ai.primaryEndpointName} onChange={(e) => updateSettings((d) => { d.ai.primaryEndpointName = e.target.value; })} placeholder="例如：主接入" /></Field>
           <Field label="主接入 Base URL"><input value={settings.ai.baseUrl} onChange={(e) => updateSettings((d) => { d.ai.baseUrl = e.target.value; })} placeholder="https://api.openai.com" /></Field>
           <Field label="主接入 API Key"><input type="password" value={settings.ai.apiKey} onChange={(e) => updateSettings((d) => { d.ai.apiKey = e.target.value; })} placeholder="仅保存在当前浏览器" /></Field>
-          <Field label="补充视觉接入名称"><input value={settings.ai.visionEndpointName} onChange={(e) => updateSettings((d) => { d.ai.visionEndpointName = e.target.value; })} placeholder="例如：视觉补充接入" /></Field>
           <Field label="补充视觉接入 Base URL"><input value={settings.ai.visionBaseUrl} onChange={(e) => updateSettings((d) => { d.ai.visionBaseUrl = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <Field label="补充视觉接入 API Key"><input type="password" value={settings.ai.visionApiKey} onChange={(e) => updateSettings((d) => { d.ai.visionApiKey = e.target.value; })} placeholder="留空：沿用主接入" /></Field>
           <div className="settings-actions inline-actions">
@@ -2345,21 +2343,6 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label={`最大输出 ${settings.ai.maxTokens}`}><input type="range" min="80" max="4000" step="20" value={settings.ai.maxTokens} onChange={(e) => updateSettings((d) => { d.ai.maxTokens = Number(e.target.value); })} /></Field>
           <Field label={`裁剪留白 ${settings.ai.visionImage.padding}px`}><input type="range" min="0" max="160" value={settings.ai.visionImage.padding} onChange={(e) => updateSettings((d) => { d.ai.visionImage.padding = Number(e.target.value); })} /></Field>
           <Field label={`图片尺寸上限 ${settings.ai.visionImage.maxSize}px`}><input type="range" min="256" max="2048" step="64" value={settings.ai.visionImage.maxSize} onChange={(e) => updateSettings((d) => { d.ai.visionImage.maxSize = Number(e.target.value); })} /></Field>
-          <Field label="识别图片格式">
-            <select value={settings.ai.visionImage.format} onChange={(e) => updateSettings((d) => { d.ai.visionImage.format = e.target.value as Settings['ai']['visionImage']['format']; })}>
-              <option value="image/webp">WebP：更小更快</option>
-              <option value="image/png">PNG：兼容但更大</option>
-            </select>
-          </Field>
-          <Field label="识别图片背景">
-            <select value={settings.ai.visionImage.background} onChange={(e) => updateSettings((d) => { d.ai.visionImage.background = e.target.value as Settings['ai']['visionImage']['background']; })}>
-              <option value="white">白底</option>
-              <option value="transparent">透明</option>
-              <option value="paper">纸色</option>
-            </select>
-          </Field>
-          <Field label="自定义接口地址"><input value={settings.ai.customEndpoint} onChange={(e) => updateSettings((d) => { d.ai.customEndpoint = e.target.value; })} placeholder="实验功能" /></Field>
-          <Field label="自定义请求体"><textarea value={settings.ai.customBody} onChange={(e) => updateSettings((d) => { d.ai.customBody = e.target.value; })} placeholder="可用 {{imageDataUrl}} {{systemPrompt}} {{model}}" /></Field>
           <div className="settings-actions inline-actions">
             <button type="button" onClick={testAiConnection}>测试 AI 连接</button>
             <button type="button" onClick={testLastCropRecognition}>识别最近裁剪图</button>
@@ -2380,7 +2363,7 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
             </select>
           </Field>
           <Field label="人格预设编辑框">
-            <textarea value={settings.persona.customSystemPrompt} onChange={(e) => updateSettings((d) => { d.persona.customSystemPrompt = e.target.value; })} placeholder="直接编辑这段人格提示词，AI 会按这里的内容回你。默认控制在两到三句话。" />
+            <textarea rows={12} value={settings.persona.customSystemPrompt} onChange={(e) => updateSettings((d) => { d.persona.customSystemPrompt = e.target.value; })} placeholder="直接编辑这段人格提示词，AI 会按这里的内容回你。默认控制在两到三句话。" />
           </Field>
           <p className="hint-text">这里只保留人格预设和可直接编辑的提示词。切换预设时会把对应文案写进上面的编辑框，你也可以继续改。</p>
           <div className="settings-actions inline-actions">
@@ -2491,14 +2474,6 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
               <option value="follow-writing">跟随书写</option>
             </select>
           </Field>
-        </Section>
-
-        <Section id="paper" title="纸张背景" settings={settings} toggleSection={toggleSection}>
-          <Field label="适应方式"><select value={settings.paper.fit} onChange={(e) => updateSettings((d) => { d.paper.fit = e.target.value as Settings['paper']['fit']; })}><option value="cover">cover</option><option value="contain">contain</option><option value="repeat">repeat</option><option value="stretch">stretch</option></select></Field>
-          <Field label="位置"><select value={settings.paper.position} onChange={(e) => updateSettings((d) => { d.paper.position = e.target.value as Settings['paper']['position']; })}><option value="center">center</option><option value="top">top</option><option value="bottom">bottom</option></select></Field>
-          <Field label={`亮度 ${settings.paper.brightness.toFixed(2)}`}><input type="range" min="0.6" max="1.4" step="0.02" value={settings.paper.brightness} onChange={(e) => updateSettings((d) => { d.paper.brightness = Number(e.target.value); })} /></Field>
-          <Field label={`对比 ${settings.paper.contrast.toFixed(2)}`}><input type="range" min="0.6" max="1.6" step="0.02" value={settings.paper.contrast} onChange={(e) => updateSettings((d) => { d.paper.contrast = Number(e.target.value); })} /></Field>
-          <Field label={`暗角 ${settings.paper.vignette.toFixed(2)}`}><input type="range" min="0" max="0.7" step="0.02" value={settings.paper.vignette} onChange={(e) => updateSettings((d) => { d.paper.vignette = Number(e.target.value); })} /></Field>
         </Section>
 
         <section className="settings-actions">
