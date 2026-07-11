@@ -199,7 +199,7 @@ function cloneSettings<T>(value: T): T {
 
 function createDefaultSettings(): Settings {
   return {
-  schemaVersion: 5,
+  schemaVersion: 6,
   ui: {
     expandedSections: {
       ai: true,
@@ -260,7 +260,7 @@ function createDefaultSettings(): Settings {
     idlePreset: 'fast',
     idleCommitMs: 1200,
     onWriteDuringReply: 'fade-out',
-    strikeTargets: [],
+    strikeTargets: ['user-ink', 'ai-reply'],
     allowTouchWriting: true,
     touchPressure: 0.85,
     penBaseWidth: 1.8,
@@ -347,7 +347,10 @@ function sanitizeSettings(settings: Settings): Settings {
     if (clean.reply.positionMode === 'auto') clean.reply.positionMode = 'follow-writing';
     clean.ai.replyVisionCapability = 'auto';
   }
-  clean.schemaVersion = 5;
+  if (incomingSchemaVersion < 6) {
+    clean.input.strikeTargets = ['user-ink', 'ai-reply'];
+  }
+  clean.schemaVersion = 6;
   clean.ai.enabled = Boolean(clean.ai.enabled);
   clean.ai.serviceMode = oneOf(clean.ai.serviceMode, ['builtin', 'custom'] as const, 'builtin');
   clean.ai.builtinSessionToken = String(clean.ai.builtinSessionToken || '');
@@ -1355,8 +1358,9 @@ function App() {
   }
 
   async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, contextText?: string, forceRecognition = false) {
-    const visionModel = settings.ai.visionModel || settings.ai.model;
-    const replyModel = settings.ai.model;
+    const visionModel = isBuiltinAI() ? 'builtin-vision' : (settings.ai.visionModel || settings.ai.model);
+    const replyModel = isBuiltinAI() ? 'builtin-reply' : settings.ai.model;
+    const hasRecognitionRoute = isBuiltinAI() || Boolean(settings.ai.visionModel.trim());
     const configuredCapability = settings.ai.replyVisionCapability;
     const cachedCapability = loadVisionCapability(settings.ai.baseUrl, replyModel);
     const capability = forceRecognition ? 'unsupported' : configuredCapability === 'auto' ? cachedCapability : configuredCapability;
@@ -1380,12 +1384,12 @@ function App() {
         if (configuredCapability === 'auto') saveVisionCapability(settings.ai.baseUrl, replyModel, 'supported');
         return reply;
       } catch (error) {
-        if (!isUnsupportedVisionError(error) || !settings.ai.visionModel.trim()) throw error;
+        if (!isUnsupportedVisionError(error) || !hasRecognitionRoute) throw error;
         if (configuredCapability === 'auto') saveVisionCapability(settings.ai.baseUrl, replyModel, 'unsupported');
         setDebugSample((sample) => ({ ...(sample || {}), model: `${replyModel} 不支持直读，切换 ${visionModel}`, at: new Date().toISOString() }));
       }
     }
-    if (!settings.ai.visionModel.trim()) throw new Error('回复模型不支持图片，请配置识字模型。');
+    if (!hasRecognitionRoute) throw new Error('回复模型不支持图片，请配置识字模型。');
     const recognizedText = await postChatCompletion(visionModel, [
       { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留，不要解释，不要回答问题，不要发挥。绝对不要输出“用户刚刚在日记纸上写下：”之类的包装句，也不要转述系统提示。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
       { role: 'user', content: [
