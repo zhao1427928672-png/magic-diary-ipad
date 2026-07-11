@@ -3,7 +3,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "npx --yes tsx scripts/test-history-store.mjs && npx --yes tsx scripts/test-script-ink.mjs && node scripts/test-reply-position.mjs && node scripts/test-dual-ai-config.mjs"
+    "test": "node --experimental-strip-types scripts/test-history-store.mjs && node --experimental-strip-types scripts/test-script-ink.mjs && node --experimental-strip-types scripts/test-diagnostics-store.mjs && node --experimental-strip-types scripts/test-scratch-gesture.mjs && node --experimental-strip-types scripts/test-reply-stream.mjs && node scripts/test-worker-security.mjs && node scripts/test-reply-position.mjs && node scripts/test-dual-ai-config.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

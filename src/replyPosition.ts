@@ -19,6 +19,9 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function centeredX(input: ReplyPositionInput) {
+  if (input.inputBox && input.mode === 'follow-writing') {
+    return clamp(input.inputBox.x, input.margin ?? 36, input.canvasW - input.replyW - (input.margin ?? 36));
+  }
   if (input.inputBox && input.mode !== 'fixed-center') {
     return clamp(input.inputBox.x + input.inputBox.w / 2 - input.replyW / 2, input.margin ?? 36, input.canvasW - input.replyW - (input.margin ?? 36));
   }
@@ -43,17 +46,15 @@ export function computeReplyPosition(input: ReplyPositionInput) {
     return { x, y: clamp(safeCenterY(input), minY, maxY) };
   }
 
-  const followGap = input.mode === 'follow-writing' ? 8 : 24;
+  if (input.mode === 'follow-writing') {
+    return { x, y: clamp(Math.round(input.inputBox.y), minY, maxY) };
+  }
+
+  const followGap = 24;
   const belowY = input.inputBox.y + input.inputBox.h + followGap;
   const aboveY = input.inputBox.y - input.replyH - followGap;
   const belowFits = belowY <= maxY;
   const aboveFits = aboveY >= minY;
-
-  if (input.mode === 'follow-writing') {
-    if (belowFits) return { x, y: Math.round(belowY) };
-    if (aboveFits) return { x, y: Math.round(aboveY) };
-    return { x, y: clamp(safeCenterY(input), minY, maxY) };
-  }
 
   if (belowFits) return { x, y: Math.round(belowY) };
   if (aboveFits) return { x, y: Math.round(aboveY) };

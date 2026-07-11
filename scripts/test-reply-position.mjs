@@ -19,8 +19,14 @@ assert.deepEqual(
 
 assert.equal(
   computeReplyPosition({ ...base, mode: 'follow-writing', inputBox: { x: 100, y: 180, w: 260, h: 80 } }).y,
-  268,
-  'follow-writing should sit close below the writing, not drift far downward'
+  180,
+  'follow-writing should start at the top of the first handwritten character'
+);
+
+assert.equal(
+  computeReplyPosition({ ...base, mode: 'follow-writing', inputBox: { x: 100, y: 180, w: 260, h: 80 } }).x,
+  100,
+  'follow-writing should start at the left edge of the first handwritten character'
 );
 
 assert.equal(

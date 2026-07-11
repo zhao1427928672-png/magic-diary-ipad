@@ -358,6 +358,15 @@ textarea {
   background: #fffaf0;
 }
 
+.font-preview {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  border: 1px solid rgba(83, 58, 29, .24);
+  border-radius: 12px;
+  background: rgba(255, 250, 237, .72);
+}
+
 .debug-box {
   max-height: 170px;
   overflow: auto;

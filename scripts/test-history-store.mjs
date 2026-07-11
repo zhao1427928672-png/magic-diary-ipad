@@ -1,4 +1,4 @@
-import { addHistoryEntry, clearHistory, loadHistory, loadActiveThreadId, setActiveThreadId, createNewThreadId } from '../src/historyStore.ts';
+import { addHistoryEntry, clearHistory, loadHistory, loadActiveThreadId, setActiveThreadId, createNewThreadId, replaceHistoryEntry } from '../src/historyStore.ts';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -27,6 +27,13 @@ assert(history[0].inputText === '你好', 'input text should be saved');
 assert(history[0].reply === '你好。', 'reply should be saved');
 assert(history[0].threadId === 'thread-a', 'thread id should be saved');
 assert(history[0].id && history[0].at, 'id and timestamp should be generated');
+const originalId = history[0].id;
+const originalAt = history[0].at;
+replaceHistoryEntry(originalId, { reply: '重新读懂了。', model: 'vision-model' });
+history = loadHistory();
+assert(history[0].reply === '重新读懂了。', 're-read should replace the original reply');
+assert(history[0].model === 'vision-model', 're-read should replace model metadata');
+assert(history[0].id === originalId && history[0].at === originalAt, 'replacement should preserve identity and timestamp');
 
 for (let i = 0; i < 60; i += 1) addHistoryEntry({ inputText: `q${i}`, reply: `a${i}`, threadId: i % 2 === 0 ? 'thread-a' : 'thread-b' });
 history = loadHistory();

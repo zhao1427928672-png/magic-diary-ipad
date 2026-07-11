@@ -94,6 +94,18 @@ export function addHistoryEntry(entry: Omit<HistoryEntry, 'id' | 'at'> & Partial
   return next;
 }
 
+export function replaceHistoryEntry(id: string, patch: Partial<Omit<HistoryEntry, 'id' | 'at'>>) {
+  const current = loadHistory();
+  const index = current.findIndex((entry) => entry.id === id);
+  if (index < 0) return null;
+  const next = normalizeEntry({ ...current[index], ...patch, id: current[index].id, at: current[index].at });
+  if (!next) return null;
+  const updated = [...current];
+  updated[index] = next;
+  saveHistory(updated);
+  return next;
+}
+
 export function clearHistory() {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(HISTORY_KEY);

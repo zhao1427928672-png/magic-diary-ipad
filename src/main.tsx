@@ -1,14 +1,19 @@
 import React, { Component, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { computeReplyPosition, type ReplyPositionMode } from './replyPosition';
-import { addHistoryEntry, clearHistory, loadHistory, loadActiveThreadId, setActiveThreadId, createNewThreadId, type HistoryEntry } from './historyStore';
+import { addHistoryEntry, clearHistory, loadHistory, loadActiveThreadId, setActiveThreadId, createNewThreadId, replaceHistoryEntry, type HistoryEntry } from './historyStore';
 import { clearDiagnostics, loadDiagnostics, pushDiagnosticEvent, setDiagnosticsEnabled, setLastDiagnosticError, type DiagnosticsState } from './diagnosticsStore';
 import { strokesForText, type InkStroke } from './scriptInk';
+import { scoreScratchGesture, unionBoxes, type ReplyHitMask } from './scratchGesture';
+import { shouldFlushReplyUpdate } from './replyStream';
 import './styles.css';
 
 type Point = { x: number; y: number; pressure: number; t: number };
 type Stroke = { points: Point[] };
 type StrikeCandidate = { bbox: BBox; at: number };
+type ScratchCandidate = { strokes: Stroke[]; timer: number | null; startedAt: number };
+type LastTurn = { turnId: string; imageDataUrl: string; contextText: string; historyEntryId?: string; rereadCount: number };
+type BuiltinQuota = { dailyQuota: number; used: number; remaining: number };
 type ReplyLine = { text: string; x: number; y: number; width: number; charEnds?: number[]; canvas?: HTMLCanvasElement; quillStrokes?: InkStroke[]; quillScale?: number; quillChars?: Array<{ offsetX: number; strokes: InkStroke[] }> };
 type Phase = 'listening' | 'pending' | 'drinking' | 'thinking' | 'replying' | 'lingering';
 
@@ -38,19 +43,17 @@ type Settings = {
   };
   ai: {
     enabled: boolean;
-    adapter: 'openai-compatible' | 'custom-http';
+    serviceMode: 'builtin' | 'custom';
+    builtinSessionToken: string;
     baseUrl: string;
     apiKey: string;
-    primaryEndpointName: string;
     visionBaseUrl: string;
     visionApiKey: string;
-    visionEndpointName: string;
-    modelMode: 'single' | 'split';
-    recognitionMode: 'vision' | 'scribble-first' | 'scribble-only';
+    recognitionMode: 'vision' | 'scribble';
     replyPipeline: 'stable' | 'fast-single';
+    replyVisionCapability: 'auto' | 'supported' | 'unsupported';
     model: string;
     visionModel: string;
-    replyModel: string;
     temperature: number;
     maxTokens: number;
     timeoutMs: number;
@@ -58,7 +61,7 @@ type Settings = {
     customHeaders: string;
     customBody: string;
     customResponsePath: string;
-    visionImage: { padding: number; maxSize: number; background: 'white' | 'transparent' | 'paper'; format: 'image/png' | 'image/webp' };
+    visionImage: { padding: number; maxSize: number };
   };
   font: {
     selectedFontId: string;
@@ -117,12 +120,43 @@ const SETTINGS_KEY = 'magic-diary-settings-v1';
 const PRESETS_KEY = 'magic-diary-presets-v1';
 const AI_ENDPOINTS_KEY = 'magic-diary-ai-endpoints-v1';
 const MODEL_OPTIONS_KEY = 'magic-diary-model-options-v1';
+const VISION_CAPABILITIES_KEY = 'magic-diary-vision-capabilities-v1';
 const REVEAL_DELAY_KEY = 'magic-diary-reveal-delay';
 function loadDiagnosticsState() {
   return loadDiagnostics();
 }
 function modelOptionsCacheKey(baseUrl: string) {
   return `${MODEL_OPTIONS_KEY}:${(baseUrl || '').trim().replace(/\/+$/, '') || 'default'}`;
+}
+
+function visionCapabilityCacheKey(baseUrl: string, model: string) {
+  return `${(baseUrl || '').trim().replace(/\/+$/, '')}::${(model || '').trim()}`;
+}
+
+function loadVisionCapability(baseUrl: string, model: string): 'supported' | 'unsupported' | null {
+  try {
+    const all = JSON.parse(localStorage.getItem(VISION_CAPABILITIES_KEY) || '{}');
+    const value = all[visionCapabilityCacheKey(baseUrl, model)];
+    return value === 'supported' || value === 'unsupported' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveVisionCapability(baseUrl: string, model: string, capability: 'supported' | 'unsupported') {
+  try {
+    const all = JSON.parse(localStorage.getItem(VISION_CAPABILITIES_KEY) || '{}');
+    all[visionCapabilityCacheKey(baseUrl, model)] = capability;
+    localStorage.setItem(VISION_CAPABILITIES_KEY, JSON.stringify(all));
+  } catch {
+    // Capability caching is an optimization; private mode must still work.
+  }
+}
+
+function isUnsupportedVisionError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return /image|vision|multimodal|image_url|content.*array|unsupported.*content|does not support.*(image|vision)/i.test(message)
+    && /unsupported|not support|invalid|cannot|can't|only text|text-only|400|422/i.test(message);
 }
 
 const FONT_OPTIONS: FontOption[] = [
@@ -165,7 +199,7 @@ function cloneSettings<T>(value: T): T {
 
 function createDefaultSettings(): Settings {
   return {
-  schemaVersion: 4,
+  schemaVersion: 5,
   ui: {
     expandedSections: {
       ai: true,
@@ -180,32 +214,30 @@ function createDefaultSettings(): Settings {
   },
   ai: {
     enabled: false,
-    adapter: 'openai-compatible',
+    serviceMode: 'builtin',
+    builtinSessionToken: '',
     baseUrl: 'https://api.openai.com',
     apiKey: '',
-    primaryEndpointName: '主接入',
     visionBaseUrl: '',
     visionApiKey: '',
-    visionEndpointName: '补充视觉接入',
-    modelMode: 'single',
     recognitionMode: 'vision',
-    replyPipeline: 'stable',
+    replyPipeline: 'fast-single',
+    replyVisionCapability: 'auto',
     model: 'gpt-4o-mini',
     visionModel: '',
-    replyModel: '',
     temperature: 0.6,
     maxTokens: 520,
-    timeoutMs: 45000,
+    timeoutMs: 5000,
     customEndpoint: '',
     customHeaders: '{\n  "Authorization": "Bearer {{apiKey}}",\n  "Content-Type": "application/json"\n}',
     customBody: '',
     customResponsePath: 'choices.0.message.content',
-    visionImage: { padding: 32, maxSize: 768, background: 'white', format: 'image/webp' },
+    visionImage: { padding: 64, maxSize: 1200 },
   },
   font: {
     selectedFontId: 'xindi-xiawucha',
     sizePreset: 'medium',
-    fontSizePx: 24,
+    fontSizePx: 32,
     lineHeight: 1.65,
     inkColor: '#1a1208',
     inkOpacity: 1,
@@ -215,7 +247,7 @@ function createDefaultSettings(): Settings {
   },
   animation: {
     speedPreset: 'slow',
-    handwritingFadeMs: 1600,
+    handwritingFadeMs: 900,
     replyFadeInMs: 1800,
     replyLingerMinMs: 5000,
     replyLingerMaxMs: 7000,
@@ -226,7 +258,7 @@ function createDefaultSettings(): Settings {
   },
   input: {
     idlePreset: 'fast',
-    idleCommitMs: 900,
+    idleCommitMs: 1200,
     onWriteDuringReply: 'fade-out',
     strikeTargets: [],
     allowTouchWriting: true,
@@ -242,7 +274,7 @@ function createDefaultSettings(): Settings {
     vignette: 0,
   },
   reply: {
-    positionMode: 'auto',
+    positionMode: 'follow-writing',
   },
   persona: {
     presetId: 'custom',
@@ -298,35 +330,40 @@ function sanitizeSettings(settings: Settings): Settings {
     clean.persona.tone = 'warm';
   }
   if (incomingSchemaVersion < 3) {
-    clean.ai.visionImage.padding = 32;
-    clean.ai.visionImage.maxSize = 768;
-    clean.ai.visionImage.format = 'image/webp';
+    clean.ai.visionImage.padding = 64;
+    clean.ai.visionImage.maxSize = 1200;
   }
   if (incomingSchemaVersion < 4) {
     clean.animation.replyLingerMinMs = 5000;
     clean.animation.replyLingerMaxMs = 7000;
     clean.animation.replyLineFadeMs = 1800;
   }
-  clean.schemaVersion = 4;
+  if (incomingSchemaVersion < 5) {
+    if (clean.ai.timeoutMs === 45000) clean.ai.timeoutMs = 5000;
+    if (clean.ai.visionImage.padding === 32) clean.ai.visionImage.padding = 64;
+    if (clean.ai.visionImage.maxSize === 768) clean.ai.visionImage.maxSize = 1200;
+    if (clean.font.sizePreset === 'medium' && clean.font.fontSizePx === 24) clean.font.fontSizePx = 32;
+    if (clean.input.idlePreset === 'fast') clean.input.idleCommitMs = 1200;
+    if (clean.reply.positionMode === 'auto') clean.reply.positionMode = 'follow-writing';
+    clean.ai.replyVisionCapability = 'auto';
+  }
+  clean.schemaVersion = 5;
   clean.ai.enabled = Boolean(clean.ai.enabled);
-  clean.ai.adapter = oneOf(clean.ai.adapter, ['openai-compatible', 'custom-http'] as const, 'openai-compatible');
-  clean.ai.modelMode = oneOf(clean.ai.modelMode, ['single', 'split'] as const, 'single');
-  clean.ai.recognitionMode = oneOf(clean.ai.recognitionMode, ['vision', 'scribble-first', 'scribble-only'] as const, 'vision');
+  clean.ai.serviceMode = oneOf(clean.ai.serviceMode, ['builtin', 'custom'] as const, 'builtin');
+  clean.ai.builtinSessionToken = String(clean.ai.builtinSessionToken || '');
+  clean.ai.recognitionMode = oneOf(clean.ai.recognitionMode, ['vision', 'scribble'] as const, 'vision');
   clean.ai.replyPipeline = oneOf(clean.ai.replyPipeline, ['stable', 'fast-single'] as const, 'stable');
+  clean.ai.replyVisionCapability = oneOf(clean.ai.replyVisionCapability, ['auto', 'supported', 'unsupported'] as const, 'auto');
   clean.ai.temperature = clamp(Number(clean.ai.temperature) || 0.7, 0, 2);
   clean.ai.maxTokens = clamp(Number(clean.ai.maxTokens) || 360, 80, 4000);
-  clean.ai.timeoutMs = clamp(Number(clean.ai.timeoutMs) || 45000, 5000, 120000);
-  clean.ai.primaryEndpointName = String(clean.ai.primaryEndpointName || defaults.ai.primaryEndpointName || '主接入').trim() || '主接入';
-  clean.ai.visionEndpointName = String(clean.ai.visionEndpointName || defaults.ai.visionEndpointName || '补充视觉接入').trim() || '补充视觉接入';
+  clean.ai.timeoutMs = clamp(Number(clean.ai.timeoutMs) || 5000, 3000, 30000);
   clean.ai.visionBaseUrl = String(clean.ai.visionBaseUrl || '').trim();
   clean.ai.visionApiKey = String(clean.ai.visionApiKey || '').trim();
-  clean.ai.visionImage.padding = clamp(Number(clean.ai.visionImage.padding) || 32, 0, 160);
-  clean.ai.visionImage.maxSize = clamp(Number(clean.ai.visionImage.maxSize) || 768, 256, 2048);
-  clean.ai.visionImage.background = oneOf(clean.ai.visionImage.background, ['white', 'transparent', 'paper'] as const, 'white');
-  clean.ai.visionImage.format = oneOf(clean.ai.visionImage.format, ['image/png', 'image/webp'] as const, 'image/webp');
+  clean.ai.visionImage.padding = clamp(Number(clean.ai.visionImage.padding) || 64, 0, 240);
+  clean.ai.visionImage.maxSize = clamp(Number(clean.ai.visionImage.maxSize) || 1200, 512, 2048);
   clean.font.selectedFontId = FONT_OPTIONS.some((font) => font.id === clean.font.selectedFontId) ? clean.font.selectedFontId : 'xindi-xiawucha';
   clean.font.sizePreset = oneOf(clean.font.sizePreset, ['small', 'medium', 'large', 'custom'] as const, 'medium');
-  clean.font.fontSizePx = clamp(Number(clean.font.fontSizePx) || 24, 16, 96);
+  clean.font.fontSizePx = clamp(Number(clean.font.fontSizePx) || 32, 14, 96);
   clean.font.lineHeight = clamp(Number(clean.font.lineHeight) || 1.65, 1.1, 2.2);
   clean.font.inkOpacity = clamp(Number(clean.font.inkOpacity) || 1, 0.2, 1);
   clean.font.strokeWidth = clamp(Number(clean.font.strokeWidth) || 2.2, 1.2, 4.8);
@@ -342,11 +379,9 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.animation.replyLingerMaxMs = clamp(Number(clean.animation.replyLingerMaxMs) || 7000, clean.animation.replyLingerMinMs, 12000);
   clean.animation.replyLingerPerLineMs = clamp(Number(clean.animation.replyLingerPerLineMs) || 260, 0, 1600);
   clean.animation.replyLineFadeMs = clamp(Number(clean.animation.replyLineFadeMs) || 1800, 500, 5000);
-  clean.animation.replyLineDelayMs = clamp(Number(clean.animation.replyLineDelayMs) || 480, 100, 1200);
-  clean.animation.wholeFadeLineThreshold = clamp(Number(clean.animation.wholeFadeLineThreshold) || 1, 1, 4);
   clean.input.idlePreset = oneOf(clean.input.idlePreset, ['fast', 'standard', 'slow', 'custom'] as const, 'standard');
   clean.input.idleCommitMs = clamp(Number(clean.input.idleCommitMs) || 1600, 700, 6000);
-  if (clean.input.idlePreset === 'fast') clean.input.idleCommitMs = 900;
+  if (clean.input.idlePreset === 'fast') clean.input.idleCommitMs = 1200;
   if (clean.input.idlePreset === 'standard') clean.input.idleCommitMs = 1600;
   if (clean.input.idlePreset === 'slow') clean.input.idleCommitMs = 2800;
   clean.input.onWriteDuringReply = oneOf(clean.input.onWriteDuringReply, ['clear-immediately', 'fade-out', 'keep'] as const, 'fade-out');
@@ -361,7 +396,8 @@ function sanitizeSettings(settings: Settings): Settings {
   clean.paper.brightness = clamp(Number(clean.paper.brightness) || 1, 0.6, 1.4);
   clean.paper.contrast = clamp(Number(clean.paper.contrast) || 1, 0.6, 1.6);
   clean.paper.vignette = clamp(Number(clean.paper.vignette) || 0, 0, 0.7);
-  clean.reply.positionMode = oneOf(clean.reply.positionMode, ['auto', 'fixed-center', 'follow-writing'] as const, 'auto');
+  clean.reply.positionMode = oneOf(clean.reply.positionMode, ['auto', 'fixed-center', 'follow-writing'] as const, 'follow-writing');
+  if (clean.reply.positionMode === 'auto') clean.reply.positionMode = 'follow-writing';
   clean.persona.presetId = oneOf(clean.persona.presetId, ['none', 'old-paper-reply', 'riddle-diary', 'custom'] as const, 'custom');
   clean.persona.replyLength = oneOf(clean.persona.replyLength, ['very-short', 'short', 'standard', 'detailed'] as const, 'short');
   clean.persona.replyMode = oneOf(clean.persona.replyMode, ['reflective', 'answer', 'coach', 'oracle', 'companion'] as const, 'reflective');
@@ -384,10 +420,10 @@ function selectedFont(settings: Settings) {
   return FONT_OPTIONS.find((font) => font.id === settings.font.selectedFontId) ?? FONT_OPTIONS[0];
 }
 
-function fontSpec(settings: Settings, viewportWidth: number) {
-  const sizeFromPreset = settings.font.sizePreset === 'small' ? 22 : settings.font.sizePreset === 'large' ? 44 : settings.font.fontSizePx;
+function fontSpec(settings: Settings, _viewportWidth: number) {
+  const sizeFromPreset = settings.font.sizePreset === 'small' ? 20 : settings.font.sizePreset === 'large' ? 52 : 32;
   const size = settings.font.sizePreset === 'custom' ? settings.font.fontSizePx : sizeFromPreset;
-  const responsiveSize = clamp(size, 16, Math.max(32, Math.min(96, viewportWidth / 10)));
+  const responsiveSize = clamp(size, 14, 96);
   const font = selectedFont(settings);
   const family = font.family.includes(',') ? font.family : `"${font.family}"`;
   return `${responsiveSize}px ${family}, "HanziPen SC", "Kaiti SC", cursive, serif`;
@@ -642,9 +678,20 @@ function App() {
   const activePointerIdRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
   const strikeCandidateRef = useRef<StrikeCandidate | null>(null);
+  const scratchCandidateRef = useRef<ScratchCandidate | null>(null);
+  const replyHitMaskRef = useRef<ReplyHitMask | null>(null);
+  const replyTargetBoxRef = useRef<BBox | null>(null);
   const lastInputBoxRef = useRef<BBox | null>(null);
+  const lastTurnRef = useRef<LastTurn | null>(null);
+  const activeAiTurnRef = useRef<{ id: string; kind: 'new' | 'reread' }>({ id: `turn-${Date.now()}`, kind: 'new' });
   const replyLinesRef = useRef<ReplyLine[]>([]);
   const replyFontRef = useRef('');
+  const replyDrawProgressRef = useRef(0);
+  const replyStreamTextRef = useRef('');
+  const replyStreamCompleteRef = useRef(true);
+  const replyAnimationDrawnRef = useRef(0);
+  const replyAnimationRateRef = useRef(0.9);
+  const replyAnimationLastFrameRef = useRef(0);
   const [phase, setPhase] = useState<Phase>('listening');
   const [status, setStatus] = useState('写一句话，然后停笔。');
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -657,6 +704,7 @@ function App() {
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [visionModelOptions, setVisionModelOptions] = useState<string[]>([]);
   const [aiEndpointPresetNames, setAiEndpointPresetNames] = useState<string[]>([]);
+  const [builtinQuota, setBuiltinQuota] = useState<BuiltinQuota | null>(null);
   const [scribbleText, setScribbleText] = useState('');
   const longPressTimerRef = useRef<number | null>(null);
   const replyDelayTimerRef = useRef<number | null>(null);
@@ -678,6 +726,14 @@ function App() {
       // Private mode or storage quota errors should not break the diary surface.
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (settings.ai.serviceMode !== 'builtin' || !settings.ai.builtinSessionToken) {
+      setBuiltinQuota(null);
+      return;
+    }
+    void refreshBuiltinQuota();
+  }, [settings.ai.serviceMode, settings.ai.builtinSessionToken]);
 
   function refreshDiagnostics() {
     setDiagnostics(loadDiagnosticsState());
@@ -702,9 +758,9 @@ function App() {
       settings: {
         recognitionMode: settings.ai.recognitionMode,
         replyPipeline: settings.ai.replyPipeline,
-        model: settings.ai.model,
-        visionModel: settings.ai.visionModel,
-        replyModel: settings.ai.replyModel,
+        model: settings.ai.serviceMode === 'builtin' ? '内置体验' : settings.ai.model,
+        visionModel: settings.ai.serviceMode === 'builtin' ? '内置体验' : settings.ai.visionModel,
+        replyModel: settings.ai.serviceMode === 'builtin' ? '内置体验' : settings.ai.model,
         persona: settings.persona.presetId,
         replyLength: settings.persona.replyLength,
         animation: settings.animation,
@@ -796,12 +852,12 @@ function App() {
       clearReplyTimers();
       try {
         const reply = settings.ai.enabled ? await replyFromRecognizedText(current) : mockReplyForPersona(settings);
-        setDebugSample({ recognizedText: current, reply, model: settings.ai.enabled ? settings.ai.model : 'mock', at: new Date().toISOString() });
+        setDebugSample({ recognizedText: current, reply, model: settings.ai.enabled ? visibleAiModel() : 'mock', at: new Date().toISOString() });
         setScribbleText('');
         if (replyGenerationRef.current === generation) startReply(reply);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setDebugSample({ recognizedText: current, error: message, model: settings.ai.model, at: new Date().toISOString() });
+        setDebugSample({ recognizedText: current, error: message, model: visibleAiModel(), at: new Date().toISOString() });
         setStatus(`随手写回信失败：${message.slice(0, 80)}`);
       }
     }, settings.input.idleCommitMs);
@@ -880,7 +936,8 @@ function App() {
   }
 
   function captureInkImage(bbox: BBox, strokes: Stroke[]) {
-    const pad = settings.ai.visionImage.padding;
+    const adaptivePad = Math.round(Math.max(bbox.w, bbox.h) * 0.12);
+    const pad = clamp(Math.max(settings.ai.visionImage.padding, adaptivePad), 48, 240);
     const { w, h } = sizeRef.current;
     const x = clamp(bbox.x - pad, 0, w);
     const y = clamp(bbox.y - pad, 0, h);
@@ -891,13 +948,8 @@ function App() {
     canvas.width = Math.max(1, Math.round(cropW * scale));
     canvas.height = Math.max(1, Math.round(cropH * scale));
     const out = canvas.getContext('2d')!;
-    if (settings.ai.visionImage.background === 'white') {
-      out.fillStyle = '#fffaf0';
-      out.fillRect(0, 0, canvas.width, canvas.height);
-    } else if (settings.ai.visionImage.background === 'paper') {
-      out.fillStyle = '#ead9b6';
-      out.fillRect(0, 0, canvas.width, canvas.height);
-    }
+    out.fillStyle = '#ffffff';
+    out.fillRect(0, 0, canvas.width, canvas.height);
     out.save();
     out.scale(scale, scale);
     out.translate(-x, -y);
@@ -907,7 +959,7 @@ function App() {
       }
     }
     out.restore();
-    return canvas.toDataURL(settings.ai.visionImage.format);
+    return canvas.toDataURL('image/png');
   }
 
   function renderTemplate(template: string, imageDataUrl: string) {
@@ -915,7 +967,7 @@ function App() {
       ['{{apiKey}}', settings.ai.apiKey],
       ['{{model}}', settings.ai.model],
       ['{{visionModel}}', settings.ai.visionModel || settings.ai.model],
-      ['{{replyModel}}', settings.ai.replyModel || settings.ai.model],
+      ['{{replyModel}}', settings.ai.model || settings.ai.model],
       ['{{visionBaseUrl}}', settings.ai.visionBaseUrl || settings.ai.baseUrl],
       ['{{visionApiKey}}', settings.ai.visionApiKey || settings.ai.apiKey],
       ['{{imageDataUrl}}', imageDataUrl],
@@ -951,6 +1003,31 @@ function App() {
     return `/api/ai-proxy${endpoint}`;
   }
 
+  async function activateBuiltinExperience(inviteCode: string, turnstileToken = '') {
+    const response = await fetch(aiProxyUrl('builtin/session'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inviteCode, turnstileToken }),
+    });
+    if (!response.ok) throw new Error(response.status === 403 ? '邀请码无效或人机验证失败。' : '内置体验暂时无法启用。');
+    const data = await response.json();
+    updateSettings((draft) => {
+      draft.ai.serviceMode = 'builtin';
+      draft.ai.enabled = true;
+      draft.ai.builtinSessionToken = String(data.token || '');
+      draft.ai.replyVisionCapability = data.replyVisionCapability === 'unsupported' ? 'unsupported' : 'supported';
+    });
+    setBuiltinQuota({ dailyQuota: Number(data.dailyQuota) || 300, used: 0, remaining: Number(data.dailyQuota) || 300 });
+  }
+
+  async function refreshBuiltinQuota() {
+    if (!settings.ai.builtinSessionToken) return;
+    const response = await fetch(aiProxyUrl('builtin/quota'), { headers: { Authorization: `Bearer ${settings.ai.builtinSessionToken}` } });
+    if (!response.ok) return;
+    const data = await response.json();
+    setBuiltinQuota({ dailyQuota: Number(data.dailyQuota) || 300, used: Number(data.used) || 0, remaining: Number(data.remaining) || 0 });
+  }
+
   async function fetchWithRetry(url: string, init: RequestInit, attempts = 2) {
     let lastError: unknown;
     for (let i = 0; i < attempts; i += 1) {
@@ -977,20 +1054,51 @@ function App() {
     return settings.ai.visionApiKey.trim() || settings.ai.apiKey.trim();
   }
 
+  function isBuiltinAI() {
+    return settings.ai.serviceMode === 'builtin';
+  }
+
+  function visibleAiModel(fallback = 'mock') {
+    return isBuiltinAI() ? '内置体验' : (settings.ai.model || fallback);
+  }
+
+  function aiRequestHeaders(): Record<string, string> {
+    return isBuiltinAI()
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.ai.builtinSessionToken}` }
+      : { 'Content-Type': 'application/json' };
+  }
+
+  function aiRequestBody(payload: unknown, baseUrl: string, apiKey: string, route: 'reply' | 'recognize' = 'reply') {
+    if (isBuiltinAI()) {
+      const turn = activeAiTurnRef.current;
+      return JSON.stringify({ payload, route, turnId: turn.id, kind: turn.kind });
+    }
+    return JSON.stringify({ baseUrl, apiKey, payload });
+  }
+
+  function updateQuotaFromResponse(response: Response) {
+    const remaining = response.headers.get('X-Diary-Quota-Remaining');
+    if (remaining === null || !builtinQuota) return;
+    const nextRemaining = Math.max(0, Number(remaining) || 0);
+    setBuiltinQuota({ ...builtinQuota, remaining: nextRemaining, used: Math.max(0, builtinQuota.dailyQuota - nextRemaining) });
+  }
+
   function recordHistoryEntry(inputText: string | undefined, reply: string, model?: string, threadIdOverride?: string) {
-    if (!reply.trim()) return;
+    if (!reply.trim()) return null;
     try {
       const entry = addHistoryEntry({
         inputText: inputText?.trim() || undefined,
         reply: reply.trim(),
-        model: model || settings.ai.model,
+        model: isBuiltinAI() ? '内置体验' : (model || settings.ai.model),
         persona: settings.persona.presetId,
         replyLength: settings.persona.replyLength,
         threadId: threadIdOverride || activeThreadId,
       });
       setHistoryEntries((entries) => [...entries, entry].slice(-50));
+      return entry;
     } catch {
       // Storage quota/private mode should never interrupt the diary surface.
+      return null;
     }
   }
 
@@ -1004,8 +1112,8 @@ function App() {
     setThread(threadId);
     setScribbleText('');
     const reply = '你好，现在是新的开始';
-    setDebugSample({ recognizedText: '/new', reply, model: settings.ai.enabled ? settings.ai.model : 'mock', at: new Date().toISOString() });
-    recordHistoryEntry('/new', reply, settings.ai.enabled ? settings.ai.model : 'mock', threadId);
+    setDebugSample({ recognizedText: '/new', reply, model: settings.ai.enabled ? visibleAiModel() : 'mock', at: new Date().toISOString() });
+    recordHistoryEntry('/new', reply, settings.ai.enabled ? visibleAiModel() : 'mock', threadId);
     return reply;
   }
 
@@ -1028,23 +1136,23 @@ function App() {
     return currentInput ? `${recent}${recent ? '\n\n' : ''}用户：${currentInput}` : recent;
   }
 
-  async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+  async function postChatCompletion(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string; route?: 'reply' | 'recognize' }) {
     const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
     const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
-    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
-    if (!model.trim()) throw new Error('还没有填写模型名。');
+    if (!isBuiltinAI() && !effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
+    if (!isBuiltinAI() && !model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     try {
       const requestStartedAt = performance.now();
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetchWithRetry(aiProxyUrl('chat'), {
+      let res = await fetchWithRetry(aiProxyUrl(isBuiltinAI() ? 'builtin/chat' : 'chat'), {
         method: 'POST',
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, payload }),
+        headers: aiRequestHeaders(),
+        body: aiRequestBody(payload, effectiveBaseUrl, effectiveApiKey, overrides?.route),
       });
-      if (res.status === 404 || res.status === 405) {
+      if (!isBuiltinAI() && (res.status === 404 || res.status === 405)) {
         res = await fetch(`${effectiveBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/chat/completions`, {
           method: 'POST',
           signal: controller.signal,
@@ -1053,6 +1161,7 @@ function App() {
         });
       }
       if (!res.ok) throw new Error(`AI 请求失败：HTTP ${res.status} ${await res.text()}`);
+      updateQuotaFromResponse(res);
       const data = await res.json();
       const elapsedMs = Math.round(performance.now() - requestStartedAt);
       setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyNonStreamMs: elapsedMs } }));
@@ -1089,23 +1198,44 @@ function App() {
     return Math.min(settings.ai.maxTokens, 1200);
   }
 
-  async function postChatCompletionStreamSentences(model: string, messages: unknown[], onSentence: (sentence: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+  async function postChatCompletionStreamSentences(model: string, messages: unknown[], onUpdate: (fullText: string) => Promise<void> | void, maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string; route?: 'reply' | 'recognize' }) {
     const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
     const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
-    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
-    if (!model.trim()) throw new Error('还没有填写模型名。');
+    if (!isBuiltinAI() && !effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
+    if (!isBuiltinAI() && !model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     const requestStartedAt = performance.now();
     let collected = '';
-    let sentenceBuffer = '';
+    let delivered = '';
     let sawFirstChunk = false;
+    let flushTimer: number | null = null;
+    let emission = Promise.resolve();
+    const emit = (force = false) => {
+      const visible = cleanDiaryReply(collected.trimStart()) || collected.trimStart();
+      if (!visible || visible === delivered) return;
+      if (!force && !shouldFlushReplyUpdate(delivered, visible)) return;
+      delivered = visible;
+      if (flushTimer) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      emission = emission.then(() => onUpdate(visible));
+    };
+    const scheduleFlush = () => {
+      if (flushTimer) return;
+      flushTimer = window.setTimeout(() => {
+        flushTimer = null;
+        emit(true);
+      }, 600);
+    };
     try {
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      const res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
-        method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: settings.ai.baseUrl, apiKey: settings.ai.apiKey, payload }),
+      const res = await fetchWithRetry(aiProxyUrl(isBuiltinAI() ? 'builtin/chat-stream' : 'chat-stream'), {
+        method: 'POST', signal: controller.signal, headers: aiRequestHeaders(),
+        body: aiRequestBody(payload, effectiveBaseUrl, effectiveApiKey, overrides?.route),
       });
+      updateQuotaFromResponse(res);
       if (!res.ok || !res.body) return await postChatCompletionFirstSentence(model, messages, maxTokens, overrides);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1130,26 +1260,25 @@ function App() {
               setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), replyFirstChunkMs: Math.round(performance.now() - requestStartedAt), replyStreamingQueue: 'yes' } }));
             }
             collected += frag;
-            sentenceBuffer += frag;
-            const split = extractSentencesFromBuffer(sentenceBuffer);
-            sentenceBuffer = split.rest;
-            for (const sentence of split.sentences) await onSentence(cleanDiaryReply(sentence) || sentence);
+            emit(false);
+            if (collected !== delivered) scheduleFlush();
           } catch { /* ignore malformed chunks */ }
         }
       }
-      const rest = cleanDiaryReply(sentenceBuffer.trim()) || sentenceBuffer.trim();
-      if (rest) await onSentence(rest);
+      emit(true);
+      await emission;
       return cleanDiaryReply(collected.trim()) || collected.trim();
     } finally {
+      if (flushTimer) window.clearTimeout(flushTimer);
       window.clearTimeout(timeout);
     }
   }
 
-  async function postChatCompletionFirstSentence(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string }) {
+  async function postChatCompletionFirstSentence(model: string, messages: unknown[], maxTokens = settings.ai.maxTokens, overrides?: { baseUrl?: string; apiKey?: string; route?: 'reply' | 'recognize' }) {
     const effectiveBaseUrl = (overrides?.baseUrl || settings.ai.baseUrl).trim();
     const effectiveApiKey = (overrides?.apiKey || settings.ai.apiKey).trim();
-    if (!effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
-    if (!model.trim()) throw new Error('还没有填写模型名。');
+    if (!isBuiltinAI() && !effectiveApiKey) throw new Error('还没有填写 密钥 API Key。');
+    if (!isBuiltinAI() && !model.trim()) throw new Error('还没有填写模型名。');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), settings.ai.timeoutMs);
     const firstSentence = (text: string) => {
@@ -1160,13 +1289,13 @@ function App() {
       const requestStartedAt = performance.now();
       const shouldReturnEarly = settings.persona.replyLength === 'very-short' && settings.persona.presetId !== 'none';
       const payload = { model, temperature: settings.ai.temperature, max_tokens: maxTokens, messages };
-      let res = await fetchWithRetry(aiProxyUrl('chat-stream'), {
+      let res = await fetchWithRetry(aiProxyUrl(isBuiltinAI() ? 'builtin/chat-stream' : 'chat-stream'), {
         method: 'POST',
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: effectiveBaseUrl, apiKey: effectiveApiKey, payload }),
+        headers: aiRequestHeaders(),
+        body: aiRequestBody(payload, effectiveBaseUrl, effectiveApiKey, overrides?.route),
       });
-      if (res.status === 404 || res.status === 405) {
+      if (!isBuiltinAI() && (res.status === 404 || res.status === 405)) {
         res = await fetch(`${effectiveBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/chat/completions`, {
           method: 'POST',
           signal: controller.signal,
@@ -1174,6 +1303,7 @@ function App() {
           body: JSON.stringify({ ...payload, stream: true }),
         });
       }
+      updateQuotaFromResponse(res);
       if (!res.ok || !res.body) return await postChatCompletion(model, messages, maxTokens, overrides);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1224,10 +1354,14 @@ function App() {
     }
   }
 
-  async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, contextText?: string) {
-    const visionModel = settings.ai.modelMode === 'split' ? (settings.ai.visionModel || settings.ai.model) : settings.ai.model;
-    const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
-    if (settings.ai.replyPipeline === 'fast-single') {
+  async function callOpenAICompatible(imageDataUrl: string, onSentence?: (sentence: string) => Promise<void> | void, contextText?: string, forceRecognition = false) {
+    const visionModel = settings.ai.visionModel || settings.ai.model;
+    const replyModel = settings.ai.model;
+    const configuredCapability = settings.ai.replyVisionCapability;
+    const cachedCapability = loadVisionCapability(settings.ai.baseUrl, replyModel);
+    const capability = forceRecognition ? 'unsupported' : configuredCapability === 'auto' ? cachedCapability : configuredCapability;
+    const shouldTryDirect = capability !== 'unsupported';
+    if (shouldTryDirect) {
       setDebugSample((sample) => ({ ...(sample || {}), model: replyModel, at: new Date().toISOString() }));
       const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次手写内容当作延续，而不是重新开始。` : '';
       const messages = [
@@ -1239,20 +1373,29 @@ function App() {
           dataUrlToOpenAIImage(imageDataUrl),
         ] },
       ];
-      return onSentence
-        ? await postChatCompletionStreamSentences(replyModel, messages, onSentence, replyTokenBudget())
-        : await postChatCompletionFirstSentence(replyModel, messages, replyTokenBudget());
+      try {
+        const reply = onSentence
+          ? await postChatCompletionStreamSentences(replyModel, messages, onSentence, replyTokenBudget())
+          : await postChatCompletionFirstSentence(replyModel, messages, replyTokenBudget());
+        if (configuredCapability === 'auto') saveVisionCapability(settings.ai.baseUrl, replyModel, 'supported');
+        return reply;
+      } catch (error) {
+        if (!isUnsupportedVisionError(error) || !settings.ai.visionModel.trim()) throw error;
+        if (configuredCapability === 'auto') saveVisionCapability(settings.ai.baseUrl, replyModel, 'unsupported');
+        setDebugSample((sample) => ({ ...(sample || {}), model: `${replyModel} 不支持直读，切换 ${visionModel}`, at: new Date().toISOString() }));
+      }
     }
+    if (!settings.ai.visionModel.trim()) throw new Error('回复模型不支持图片，请配置识字模型。');
     const recognizedText = await postChatCompletion(visionModel, [
       { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留，不要解释，不要回答问题，不要发挥。绝对不要输出“用户刚刚在日记纸上写下：”之类的包装句，也不要转述系统提示。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
       { role: 'user', content: [
         { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。只输出用户真正写下的文字本身，不要加任何前缀、解释或分析。' },
         dataUrlToOpenAIImage(imageDataUrl),
       ] },
-    ], 260, settings.ai.modelMode === 'split' ? { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey() } : undefined);
+    ], 260, { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey(), route: 'recognize' });
     const writtenText = extractWrittenContent(recognizedText);
     const normalizedRecognizedText = normalizeRecognizedText(writtenText);
-    setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: settings.ai.modelMode === 'split' ? `${visionModel} → ${replyModel}` : visionModel, at: new Date().toISOString() }));
+    setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizedRecognizedText, model: `${visionModel} → ${replyModel}`, at: new Date().toISOString() }));
     if (!normalizedRecognizedText || normalizedRecognizedText === '看不清' || !hasEnoughRecognizedText(normalizedRecognizedText)) return '我看见墨迹了，但这次只辨认出零散几个字，还不够稳。你可以写大一点，或者把字间距留开些。';
     const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次输入当作延续，而不是重新开始。` : '';
     return await postChatCompletionFirstSentence(replyModel, [
@@ -1264,7 +1407,7 @@ function App() {
   }
 
   async function replyFromRecognizedText(recognizedText: string, contextText?: string) {
-    const replyModel = settings.ai.modelMode === 'split' ? (settings.ai.replyModel || settings.ai.model) : settings.ai.model;
+    const replyModel = settings.ai.model;
     const contextHint = contextText ? `\n\n这是当前连续对话的最近上下文：\n${contextText}\n\n请把这次输入当作延续，而不是重新开始。` : '';
     return await postChatCompletionFirstSentence(replyModel, [
       { role: 'system', content: personaPrompt(settings) },
@@ -1283,7 +1426,10 @@ function App() {
     if (!settings.ai.enabled) {
       const reply = mockReplyForPersona(settings);
       setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, reply, model: 'mock', at: new Date().toISOString() });
-      if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble || undefined, reply, 'mock');
+      if (shouldRecordHistory?.() ?? true) {
+        const entry = recordHistoryEntry(scribble || undefined, reply, 'mock');
+        if (entry && lastTurnRef.current?.imageDataUrl === imageDataUrl) lastTurnRef.current.historyEntryId = entry.id;
+      }
       setScribbleText('');
       return reply;
     }
@@ -1291,21 +1437,26 @@ function App() {
     try {
       if (settings.ai.recognitionMode !== 'vision' && scribble) {
         const reply = await replyFromRecognizedText(scribble, contextText);
-        setDebugSample({ imageDataUrl, recognizedText: scribble, reply, model: settings.ai.model, at: new Date().toISOString() });
-        if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble, reply, settings.ai.model);
+        setDebugSample({ imageDataUrl, recognizedText: scribble, reply, model: visibleAiModel(), at: new Date().toISOString() });
+        if (shouldRecordHistory?.() ?? true) {
+          const entry = recordHistoryEntry(scribble, reply, settings.ai.model);
+          if (entry && lastTurnRef.current?.imageDataUrl === imageDataUrl) lastTurnRef.current.historyEntryId = entry.id;
+        }
         setScribbleText('');
         return reply;
       }
-      if (settings.ai.recognitionMode === 'scribble-only') throw new Error('随手写没有识别到文本。请在随手写区域写字，或把识别方式改成“双轨”。');
-      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(imageDataUrl) : await callOpenAICompatible(imageDataUrl, onSentence, contextText);
-      if (shouldRecordHistory?.() ?? true) recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
-      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || settings.ai.model, at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
+      const reply = await callOpenAICompatible(imageDataUrl, onSentence, contextText);
+      if (shouldRecordHistory?.() ?? true) {
+        const entry = recordHistoryEntry(scribble || undefined, reply, settings.ai.model);
+        if (entry && lastTurnRef.current?.imageDataUrl === imageDataUrl) lastTurnRef.current.historyEntryId = entry.id;
+      }
+      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl, reply, model: sample?.model || visibleAiModel(), at: new Date().toISOString(), timings: { ...(sample?.timings || {}), totalAiMs: Math.round(performance.now() - totalStartedAt) } }));
       setScribbleText('');
       return reply;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, error: message, model: settings.ai.model, at: new Date().toISOString() });
-      return `这次回信失败了。${message}`;
+      setDebugSample({ imageDataUrl, recognizedText: scribble || undefined, error: message, model: visibleAiModel(), at: new Date().toISOString() });
+      throw error;
     }
   }
 
@@ -1324,22 +1475,39 @@ function App() {
     const imageDataUrl = captureInkImage(bbox, strokesSnapshot);
     const captureMs = Math.round(performance.now() - captureStartedAt);
     const imagePayloadKb = Math.round(imageDataUrl.length / 1024);
-    setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), captureMs, imagePayloadKb, imageFormat: settings.ai.visionImage.format, imageMaxSize: settings.ai.visionImage.maxSize } }));
-    lastInputBoxRef.current = bboxForStrokes(strokesSnapshot, 8) || bbox;
+    setDebugSample((sample) => ({ ...(sample || {}), timings: { ...(sample?.timings || {}), captureMs, imagePayloadKb, imageFormat: 'image/png', imageMaxSize: settings.ai.visionImage.maxSize } }));
+    lastInputBoxRef.current = bboxForStrokes(strokesSnapshot, 0) || bbox;
+    const turnId = `turn-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    activeAiTurnRef.current = { id: turnId, kind: 'new' };
+    lastTurnRef.current = { turnId, imageDataUrl, contextText: recentContextText(), rereadCount: 0 };
     setPhase('drinking');
     setStatus('纸页正在读走你的墨迹……');
     const generation = replyGeneration;
     let revealReady = false;
     let replyStarted = false;
     let streamedAny = false;
+    let streamFinished = false;
     let streamedText = '';
     let replyText: string | null = null;
+    let slowResponseTimer = window.setTimeout(() => {
+      if (isCurrentTurn() && replyText === null) setStatus('墨迹还没找到回应……');
+    }, 2500);
     const isCurrentTurn = () => inkGenerationRef.current === inkGeneration && replyGenerationRef.current === generation;
+    const clearSlowResponseTimer = () => {
+      if (!slowResponseTimer) return;
+      window.clearTimeout(slowResponseTimer);
+      slowResponseTimer = 0;
+    };
     const maybeStartReply = () => {
       if (!revealReady || replyText === null) return;
       if (isCurrentTurn()) {
-        replyStarted = true;
-        startReply(replyText);
+        clearSlowResponseTimer();
+        if (replyStarted) {
+          updateStreamingReply(replyText, generation);
+        } else {
+          replyStarted = true;
+          startReply(replyText, { streaming: streamedAny && !streamFinished, generation });
+        }
       }
     };
     // R3 fix: save reveal timer so it can be cancelled
@@ -1351,18 +1519,34 @@ function App() {
       setStatus(replyText === null ? '日记正在回信……' : '墨迹开始浮现。');
       maybeStartReply();
     }, Math.min(550, settings.animation.handwritingFadeMs));
-    void generateReplyFromInk(imageDataUrl, async (sentence) => {
+    void generateReplyFromInk(imageDataUrl, async (fullText) => {
       if (!isCurrentTurn()) return;
+      clearSlowResponseTimer();
       streamedAny = true;
-      streamedText = `${streamedText}${streamedText ? '\n' : ''}${sentence}`;
+      streamedText = fullText;
       replyText = streamedText;
       maybeStartReply();
     }, isCurrentTurn).then((reply) => {
       if (!isCurrentTurn()) return;
-      if (!streamedAny) {
-        replyText = reply;
-        maybeStartReply();
+      clearSlowResponseTimer();
+      streamFinished = true;
+      replyText = reply;
+      if (streamedAny && replyStarted) finishStreamingReply(reply, generation);
+      else maybeStartReply();
+    }).catch((error) => {
+      if (!isCurrentTurn()) return;
+      clearSlowResponseTimer();
+      if (inkFadeRafRef.current) {
+        window.cancelAnimationFrame(inkFadeRafRef.current);
+        inkFadeRafRef.current = null;
       }
+      strokesRef.current = strokesSnapshot;
+      redrawStrokes(ctxs.ink, strokesRef.current, w, h, 1, settings);
+      setPhase('listening');
+      const message = error instanceof DOMException && error.name === 'AbortError'
+        ? '这次回应太慢了，墨迹已经回到纸面。'
+        : '墨迹没能抵达日记深处，已经回到纸面。';
+      setStatus(message);
     });
 
     const start = performance.now();
@@ -1588,32 +1772,158 @@ function App() {
     return { x: line.x - 12, y: line.y - 10, w: line.canvas.width / dpr, h: line.canvas.height / dpr };
   }
 
-  async function startReply(text: string) {
+  function rebuildReplyHitMask(lines: ReplyLine[], width: number, height: number) {
+    const boxes = lines.map(bboxForReplyLine).filter((box): box is BBox => Boolean(box));
+    replyTargetBoxRef.current = unionBoxes(boxes);
+    if (!boxes.length) {
+      replyHitMaskRef.current = null;
+      return;
+    }
+    const scale = 0.25;
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = Math.max(1, Math.ceil(width * scale));
+    maskCanvas.height = Math.max(1, Math.ceil(height * scale));
+    const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+    if (!maskCtx) return;
+    maskCtx.setTransform(scale, 0, 0, scale, 0, 0);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    for (const line of lines) {
+      if (!line.canvas) continue;
+      maskCtx.drawImage(line.canvas, line.x - 12, line.y - 10, line.canvas.width / dpr, line.canvas.height / dpr);
+    }
+    maskCtx.setTransform(1, 0, 0, 1, 0, 0);
+    const pixels = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height).data;
+    const alpha = new Uint8Array(maskCanvas.width * maskCanvas.height);
+    for (let index = 0; index < alpha.length; index += 1) alpha[index] = pixels[index * 4 + 3];
+    replyHitMaskRef.current = { scale, width: maskCanvas.width, height: maskCanvas.height, alpha };
+  }
+
+  function rewindReply(onComplete?: () => void) {
     clearReplyTimers();
+    const ctxs = ctxsRef.current;
+    const lines = replyLinesRef.current;
+    if (!ctxs || !lines.length) {
+      onComplete?.();
+      return;
+    }
     const generation = ++replyGenerationRef.current;
+    const { w, h } = sizeRef.current;
+    const from = clamp(replyDrawProgressRef.current || 1, 0, 1);
+    const duration = clamp(350 + lines.reduce((sum, line) => sum + line.text.length, 0) * 6, 350, 700);
+    const startedAt = performance.now();
+    const step = () => {
+      if (replyGenerationRef.current !== generation) return;
+      const elapsed = performance.now() - startedAt;
+      const t = clamp(elapsed / duration, 0, 1);
+      const eased = t * t * (3 - 2 * t);
+      const progress = from * (1 - eased);
+      replyDrawProgressRef.current = progress;
+      ctxs.reply.clearRect(0, 0, w, h);
+      if (lines.some((line) => line.quillStrokes?.length)) drawReplyQuillWriting(ctxs.reply, lines, progress, settings);
+      else drawReplyLinesWriting(ctxs.reply, lines, progress);
+      if (t < 1) {
+        replyFadeRafRef.current = requestAnimationFrame(step);
+        return;
+      }
+      ctxs.reply.clearRect(0, 0, w, h);
+      replyLinesRef.current = [];
+      replyHitMaskRef.current = null;
+      replyTargetBoxRef.current = null;
+      replyFadeRafRef.current = null;
+      setPhase('listening');
+      onComplete?.();
+    };
+    replyFadeRafRef.current = requestAnimationFrame(step);
+  }
+
+  async function rereadLastTurn() {
+    const turn = lastTurnRef.current;
+    if (!turn) {
+      setStatus('上一轮墨迹已经不在纸页里了。');
+      return;
+    }
+    if (turn.rereadCount >= 3) {
+      setStatus('这页墨迹已经重读三次，请重新写一遍。');
+      return;
+    }
+    turn.rereadCount += 1;
+    activeAiTurnRef.current = { id: turn.turnId, kind: 'reread' };
+    setPhase('thinking');
+    setStatus('日记正在换一种方式重读墨迹……');
+    try {
+      const reply = settings.ai.enabled
+        ? await callOpenAICompatible(turn.imageDataUrl, undefined, turn.contextText, true)
+        : mockReplyForPersona(settings);
+      if (lastTurnRef.current !== turn) return;
+      if (turn.historyEntryId) {
+        const replacement = replaceHistoryEntry(turn.historyEntryId, { reply, model: settings.ai.enabled ? `${settings.ai.visionModel} → ${settings.ai.model}` : 'mock' });
+        if (replacement) setHistoryEntries((entries) => entries.map((entry) => entry.id === replacement.id ? replacement : entry));
+      } else {
+        const entry = recordHistoryEntry(undefined, reply, settings.ai.enabled ? visibleAiModel() : 'mock');
+        if (entry) turn.historyEntryId = entry.id;
+      }
+      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl: turn.imageDataUrl, reply, model: settings.ai.enabled ? `${settings.ai.visionModel} → ${settings.ai.model}` : 'mock', at: new Date().toISOString() }));
+      startReply(reply);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDebugSample((sample) => ({ ...(sample || {}), imageDataUrl: turn.imageDataUrl, error: message, at: new Date().toISOString() }));
+      setPhase('listening');
+      setStatus('这次重读没有成功，你可以再划一次或重新书写。');
+    }
+  }
+
+  function confirmScratchGesture(candidate: ScratchCandidate) {
     const ctxs = ctxsRef.current;
     if (!ctxs) return;
-    const { w, h } = sizeRef.current;
-    setPhase('replying');
-    setStatus('墨迹正在回信。');
-    ctxs.reply.clearRect(0, 0, w, h);
+    if (candidate.timer) window.clearTimeout(candidate.timer);
+    scratchCandidateRef.current = null;
+    strokesRef.current = strokesRef.current.filter((stroke) => !candidate.strokes.includes(stroke));
+    redrawStrokes(ctxs.ink, strokesRef.current, sizeRef.current.w, sizeRef.current.h, 1, settings);
+    clearIdleTimer();
+    setStatus('这封回信正在沿原路收回……');
+    rewindReply(() => { void rereadLastTurn(); });
+  }
 
-    const spec = fontSpec(settings, w);
-    const replyFontSize = Number(spec.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24);
-    const replyLineHeight = replyFontSize * settings.font.lineHeight;
-    const fontSpecValue = spec;
-    replyFontRef.current = fontSpecValue;
-    try {
-      const family = selectedFont(settings).family.split(',')[0].replace(/["']/g, '').trim();
-      await document.fonts?.load(`${replyFontSize}px "${family}"`);
-      await document.fonts?.ready;
-    } catch {
-      // If the browser refuses font loading, fall back silently.
+  function handleScratchStroke(stroke: Stroke) {
+    const target = replyTargetBoxRef.current;
+    const mask = replyHitMaskRef.current;
+    const strokeBox = bboxForStroke(stroke, 12);
+    if (!target || !mask || !strokeBox || !intersects(strokeBox, target)) return false;
+
+    const current = scratchCandidateRef.current;
+    const candidate = current && performance.now() - current.startedAt <= 2000
+      ? current
+      : { strokes: [], timer: null, startedAt: performance.now() };
+    if (candidate.timer) window.clearTimeout(candidate.timer);
+    candidate.strokes.push(stroke);
+    scratchCandidateRef.current = candidate;
+    const metrics = scoreScratchGesture(candidate.strokes, target, mask);
+    if (metrics.recognized) {
+      confirmScratchGesture(candidate);
+      return true;
     }
-    if (replyGenerationRef.current !== generation) return;
 
+    setStatus('继续涂划可以划去这封回信。');
+    candidate.timer = window.setTimeout(() => {
+      if (scratchCandidateRef.current !== candidate) return;
+      scratchCandidateRef.current = null;
+      const finalMetrics = scoreScratchGesture(candidate.strokes, target, mask);
+      if (finalMetrics.recognized) confirmScratchGesture(candidate);
+      else scheduleCommit();
+    }, 350);
+    return true;
+  }
+
+  function layoutReplyLines(text: string, fontSpecValue: string, replyFontSize: number, w: number, h: number) {
+    const ctxs = ctxsRef.current;
+    if (!ctxs) return [] as ReplyLine[];
     ctxs.reply.font = fontSpecValue;
-    const maxWidth = Math.min(w - 86, settings.font.maxWidth);
+    const replyLineHeight = replyFontSize * settings.font.lineHeight;
+    const desiredAnchorX = clamp(lastInputBoxRef.current?.x ?? 38, 38, w - 38);
+    const availableFromAnchor = w - 38 - desiredAnchorX;
+    const maxWidth = settings.reply.positionMode === 'follow-writing'
+      ? Math.min(w - 76, settings.font.maxWidth, Math.max(240, availableFromAnchor))
+      : Math.min(w - 86, settings.font.maxWidth);
     const provisionalX = Math.max(38, (w - maxWidth) / 2);
     const provisionalY = Math.max(86, h * 0.28);
     const lines: ReplyLine[] = [];
@@ -1673,13 +1983,64 @@ function App() {
         replyLine.quillChars = [];
       }
     }
-    replyLinesRef.current = lines;
+    return lines;
+  }
 
-    const start = performance.now();
+  function updateStreamingReply(text: string, generation: number) {
+    if (replyGenerationRef.current !== generation || !text || text === replyStreamTextRef.current) return;
+    replyStreamTextRef.current = text;
+    const { w, h } = sizeRef.current;
+    const fontSpecValue = replyFontRef.current || fontSpec(settings, w);
+    const replyFontSize = Number(fontSpecValue.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24);
+    const lines = layoutReplyLines(text, fontSpecValue, replyFontSize, w, h);
+    replyLinesRef.current = lines;
+    rebuildReplyHitMask(lines, w, h);
+  }
+
+  function finishStreamingReply(text: string, generation: number) {
+    if (replyGenerationRef.current !== generation) return;
+    updateStreamingReply(text, generation);
+    replyStreamCompleteRef.current = true;
+  }
+
+  async function startReply(text: string, options?: { streaming?: boolean; generation?: number }) {
+    clearReplyTimers();
+    const generation = options?.generation ?? ++replyGenerationRef.current;
+    if (options?.generation !== undefined) replyGenerationRef.current = options.generation;
+    const ctxs = ctxsRef.current;
+    if (!ctxs) return;
+    const { w, h } = sizeRef.current;
+    setPhase('replying');
+    setStatus('墨迹正在回信。');
+    ctxs.reply.clearRect(0, 0, w, h);
+    replyDrawProgressRef.current = 0;
+    replyAnimationDrawnRef.current = 0;
+    replyAnimationLastFrameRef.current = 0;
+    replyStreamTextRef.current = text;
+    replyStreamCompleteRef.current = !options?.streaming;
+
+    const fontSpecValue = fontSpec(settings, w);
+    const replyFontSize = Number(fontSpecValue.match(/^(\d+(?:\.\d+)?)px/)?.[1] ?? 24);
+    replyFontRef.current = fontSpecValue;
+    try {
+      const family = selectedFont(settings).family.split(',')[0].replace(/["']/g, '').trim();
+      await document.fonts?.load(`${replyFontSize}px "${family}"`);
+      await document.fonts?.ready;
+    } catch {
+      // If the browser refuses font loading, fall back silently.
+    }
+    if (replyGenerationRef.current !== generation) return;
+
+    const lines = layoutReplyLines(replyStreamTextRef.current, fontSpecValue, replyFontSize, w, h);
+    replyLinesRef.current = lines;
+    rebuildReplyHitMask(lines, w, h);
+
     const hasQuill = lines.some((line) => line.quillStrokes?.length);
+    const initialTotal = hasQuill ? quillAnimationLength(lines) : Math.max(1, lines.reduce((sum, line) => sum + line.text.length, 0));
     const duration = hasQuill
       ? Math.max(settings.animation.replyFadeInMs, Math.min(7000, quillAnimationLength(lines) / 0.9))
       : settings.animation.replyFadeInMs;
+    replyAnimationRateRef.current = initialTotal / Math.max(1, duration);
     const fadeIn = () => {
       if (replyGenerationRef.current !== generation) {
         // R2 fix: generation expired during fade-in — clean up
@@ -1688,17 +2049,24 @@ function App() {
         replyFadeRafRef.current = null;
         return;
       }
-      const t = clamp((performance.now() - start) / duration, 0, 1);
-      const eased = t * t * (3 - 2 * t);
+      const now = performance.now();
+      const previousFrame = replyAnimationLastFrameRef.current || now;
+      replyAnimationLastFrameRef.current = now;
+      replyAnimationDrawnRef.current += Math.max(0, now - previousFrame) * replyAnimationRateRef.current;
+      const currentLines = replyLinesRef.current;
+      const currentHasQuill = currentLines.some((line) => line.quillStrokes?.length);
+      const total = currentHasQuill ? quillAnimationLength(currentLines) : Math.max(1, currentLines.reduce((sum, line) => sum + line.text.length, 0));
+      const progress = clamp(replyAnimationDrawnRef.current / total, 0, 1);
+      replyDrawProgressRef.current = progress;
       ctxs.reply.clearRect(0, 0, w, h);
-      if (lines.some((line) => line.quillStrokes?.length)) drawReplyQuillWriting(ctxs.reply, lines, eased, settings);
-      else drawReplyLinesWriting(ctxs.reply, lines, eased);
-      if (t < 1) {
+      if (currentHasQuill) drawReplyQuillWriting(ctxs.reply, currentLines, progress, settings);
+      else drawReplyLinesWriting(ctxs.reply, currentLines, progress);
+      if (progress < 1 || !replyStreamCompleteRef.current) {
         replyFadeRafRef.current = requestAnimationFrame(fadeIn);
       } else {
         setPhase('lingering');
         setStatus('写完了。你可以继续写。');
-        const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 5000 + lines.length * settings.animation.replyLingerPerLineMs));
+        const lingerMs = Math.max(settings.animation.replyLingerMinMs, Math.min(settings.animation.replyLingerMaxMs, 5000 + currentLines.length * settings.animation.replyLingerPerLineMs));
         replyDelayTimerRef.current = window.setTimeout(() => {
           if (replyGenerationRef.current === generation) fadeReply(generation);
         }, lingerMs);
@@ -1716,6 +2084,9 @@ function App() {
     const hasQuill = lines.some((line) => line.quillChars?.length);
     if (!lines.length || !hasQuill) {
       ctxs.reply.clearRect(0, 0, w, h);
+      replyHitMaskRef.current = null;
+      replyTargetBoxRef.current = null;
+      replyDrawProgressRef.current = 0;
       setPhase('listening');
       setStatus('继续写。');
       return;
@@ -1732,6 +2103,9 @@ function App() {
         // R2 fix: generation expired — clean up reply canvas instead of leaving residue
         ctxs.reply.clearRect(0, 0, w, h);
         replyLinesRef.current = [];
+        replyHitMaskRef.current = null;
+        replyTargetBoxRef.current = null;
+        replyDrawProgressRef.current = 0;
         replyFadeRafRef.current = null;
         return;
       }
@@ -1892,6 +2266,7 @@ function App() {
         setStatus('这笔被系统中断了，没有提交。');
         return;
       }
+      if (handleScratchStroke(stroke)) return;
       if (isStrikeStroke(stroke) && handleStrikeStroke(stroke)) return;
       scheduleCommit();
     };
@@ -1967,16 +2342,16 @@ function App() {
     if (!name) return;
     const presets = JSON.parse(localStorage.getItem(AI_ENDPOINTS_KEY) || '{}');
     presets[name] = {
-      primaryEndpointName: settings.ai.primaryEndpointName,
+      primaryEndpointName: '主接入',
       baseUrl: settings.ai.baseUrl,
       apiKey: settings.ai.apiKey,
       model: settings.ai.model,
-      replyModel: settings.ai.replyModel,
-      visionEndpointName: settings.ai.visionEndpointName,
+      replyModel: settings.ai.model,
+      visionEndpointName: '补充视觉接入',
       visionBaseUrl: settings.ai.visionBaseUrl,
       visionApiKey: settings.ai.visionApiKey,
       visionModel: settings.ai.visionModel,
-      modelMode: settings.ai.modelMode,
+      replyVisionCapability: settings.ai.replyVisionCapability,
       replyPipeline: settings.ai.replyPipeline,
     };
     localStorage.setItem(AI_ENDPOINTS_KEY, JSON.stringify(presets));
@@ -1991,16 +2366,13 @@ function App() {
     if (!name || !presets[name]) return;
     const preset = presets[name];
     updateSettings((d) => {
-      d.ai.primaryEndpointName = preset.primaryEndpointName || d.ai.primaryEndpointName;
       d.ai.baseUrl = preset.baseUrl || '';
       d.ai.apiKey = preset.apiKey || '';
-      d.ai.model = preset.model || '';
-      d.ai.replyModel = preset.replyModel || '';
-      d.ai.visionEndpointName = preset.visionEndpointName || d.ai.visionEndpointName;
+      d.ai.model = preset.replyModel || preset.model || '';
       d.ai.visionBaseUrl = preset.visionBaseUrl || '';
       d.ai.visionApiKey = preset.visionApiKey || '';
       d.ai.visionModel = preset.visionModel || '';
-      d.ai.modelMode = preset.modelMode || d.ai.modelMode;
+      d.ai.replyVisionCapability = preset.replyVisionCapability || 'auto';
       d.ai.replyPipeline = preset.replyPipeline || d.ai.replyPipeline;
     });
     setStatus(`已载入接入配置：${name}`);
@@ -2030,7 +2402,7 @@ function App() {
 
   async function loadModelOptions() {
     try {
-      const ids = await loadModelOptionsFor(settings.ai.baseUrl, settings.ai.apiKey, setModelOptions, settings.ai.primaryEndpointName || '主接入');
+      const ids = await loadModelOptionsFor(settings.ai.baseUrl, settings.ai.apiKey, setModelOptions, '主接入');
       setStatus(ids.length ? `已读取主接入 ${ids.length} 个模型。` : '主接入返回了模型列表，但没有可用模型名。');
     } catch (error) {
       const message = error instanceof TypeError
@@ -2045,7 +2417,7 @@ function App() {
     try {
       const baseUrl = settings.ai.visionBaseUrl.trim() || settings.ai.baseUrl;
       const apiKey = settings.ai.visionApiKey.trim() || settings.ai.apiKey;
-      const ids = await loadModelOptionsFor(baseUrl, apiKey, setVisionModelOptions, settings.ai.visionEndpointName || '补充视觉接入');
+      const ids = await loadModelOptionsFor(baseUrl, apiKey, setVisionModelOptions, '补充视觉接入');
       setStatus(ids.length ? `已读取补充视觉接入 ${ids.length} 个模型。` : '补充视觉接入返回了模型列表，但没有可用模型名。');
     } catch (error) {
       const message = error instanceof TypeError
@@ -2060,14 +2432,14 @@ function App() {
     try {
       if (!debugSample?.imageDataUrl) throw new Error('还没有最近一次裁剪图。请先写一句话并停笔。');
       if (!settings.ai.apiKey.trim()) throw new Error('请先填写 密钥 API Key。');
-      const model = settings.ai.modelMode === 'split' ? (settings.ai.visionModel || settings.ai.model) : settings.ai.model;
+      const model = settings.ai.visionModel || settings.ai.model;
       const recognizedText = await postChatCompletion(model, [
         { role: 'system', content: '你是宽容的手写 OCR。优先尽力读懂整句话的意思，而不是因为一两个字模糊就整句判失败。请只输出你能确认的大部分原文；个别看不清的位置用[看不清]保留。只有当整句几乎都无法辨认时，才只输出“看不清”。' },
         { role: 'user', content: [
           { type: 'text', text: '请尽力转写图片里的手写中文。大部分能看懂就继续输出；只有极少数模糊位置，用[看不清]占位。除手写原文外不要输出别的。' },
           dataUrlToOpenAIImage(debugSample.imageDataUrl),
         ] },
-      ], 260, settings.ai.modelMode === 'split' ? { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey() } : undefined);
+      ], 260, { baseUrl: visionProviderBaseUrl(), apiKey: visionProviderApiKey(), route: 'recognize' });
       setDebugSample((sample) => ({ ...(sample || {}), recognizedText: normalizeRecognizedText(recognizedText), model, at: new Date().toISOString() }));
       setStatus('最近一次裁剪图识别完成。');
     } catch (error) {
@@ -2081,12 +2453,12 @@ function App() {
     try {
       const prompt = '你是谁？';
       const reply = settings.ai.enabled ? await replyFromRecognizedText(prompt) : mockReplyForPersona(settings);
-      setDebugSample({ recognizedText: prompt, reply, model: settings.ai.enabled ? settings.ai.model : 'mock-persona', at: new Date().toISOString() });
+      setDebugSample({ recognizedText: prompt, reply, model: settings.ai.enabled ? visibleAiModel() : 'mock-persona', at: new Date().toISOString() });
       setStatus('人格测试完成。');
       startReply(reply);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDebugSample({ recognizedText: '你是谁？', error: message, model: settings.ai.model, at: new Date().toISOString() });
+      setDebugSample({ recognizedText: '你是谁？', error: message, model: visibleAiModel(), at: new Date().toISOString() });
       setStatus(`人格测试失败：${message.slice(0, 80)}`);
     }
   }
@@ -2104,12 +2476,12 @@ function App() {
       testCtx.font = '24px Kaiti SC, serif';
       testCtx.fillText('测试', 20, 48);
       const testImage = testCanvas.toDataURL('image/png');
-      const reply = settings.ai.adapter === 'custom-http' ? await callCustomHttp(testImage) : await callOpenAICompatible(testImage);
-      setDebugSample({ imageDataUrl: testImage, reply, model: settings.ai.model, at: new Date().toISOString() });
+      const reply = false ? await callCustomHttp(testImage) : await callOpenAICompatible(testImage);
+      setDebugSample({ imageDataUrl: testImage, reply, model: visibleAiModel(), at: new Date().toISOString() });
       setStatus('AI 测试通过。');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDebugSample({ error: message, model: settings.ai.model, at: new Date().toISOString() });
+      setDebugSample({ error: message, model: visibleAiModel(), at: new Date().toISOString() });
       setStatus(`AI 测试失败：${message.slice(0, 80)}`);
     }
   }
@@ -2213,6 +2585,8 @@ function App() {
           modelOptions={modelOptions}
           visionModelOptions={visionModelOptions}
           aiEndpointPresetNames={aiEndpointPresetNames}
+          activateBuiltinExperience={activateBuiltinExperience}
+          builtinQuota={builtinQuota}
           testAiConnection={testAiConnection}
           testLastCropRecognition={testLastCropRecognition}
           testPersonaReply={testPersonaReply}
@@ -2249,6 +2623,32 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="field"><span>{label}</span>{children}</label>;
 }
 
+function FontPreview({ settings }: { settings: Settings }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const cssWidth = Math.max(280, canvas.clientWidth || 280);
+    const cssHeight = Math.max(96, Math.min(190, settings.font.fontSizePx * 2.2));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.style.height = `${cssHeight}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+    ctx.font = fontSpec(settings, cssWidth);
+    ctx.fillStyle = settings.font.inkColor;
+    ctx.globalAlpha = settings.font.inkOpacity;
+    ctx.shadowColor = 'rgba(40, 22, 0, .16)';
+    ctx.shadowBlur = settings.font.shadowStrength;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('墨迹会记得你。', 18, cssHeight / 2, cssWidth - 36);
+  }, [settings]);
+  return <canvas ref={canvasRef} className="font-preview" aria-label="当前回信字体实际大小预览" />;
+}
+
 function ModelPicker({ label, value, options, fallback, allowEmpty = false, onChange }: { label: string; value: string; options: string[]; fallback: string; allowEmpty?: boolean; onChange: (value: string) => void }) {
   const normalized = Array.from(new Set([...(value && !options.includes(value) ? [value] : []), ...options]));
   return (
@@ -2265,7 +2665,24 @@ function ModelPicker({ label, value, options, fallback, allowEmpty = false, onCh
   );
 }
 
-function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, loadVisionModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, visionModelOptions, aiEndpointPresetNames, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; loadVisionModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: (nameFromSelect?: string) => void; modelOptions: string[]; visionModelOptions: string[]; aiEndpointPresetNames: string[]; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
+function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection, copySettingsJson, importSettingsJson, savePreset, loadPreset, loadModelOptions, loadVisionModelOptions, saveAiEndpoints, loadAiEndpoints, modelOptions, visionModelOptions, aiEndpointPresetNames, activateBuiltinExperience, builtinQuota, testAiConnection, testLastCropRecognition, testPersonaReply, debugSample, diagnostics, setDiagnosticsEnabled, copyDiagnosticsJson, clearDiagnosticLogs, historyEntries, activeThreadId, clearConversationHistory, onClose }: { settings: Settings; updateSettings: (mutator: (draft: Settings) => void) => void; resetSettings: () => void; toggleSection: (id: string) => void; copySettingsJson: () => void; importSettingsJson: () => void; savePreset: () => void; loadPreset: () => void; loadModelOptions: () => void; loadVisionModelOptions: () => void; saveAiEndpoints: () => void; loadAiEndpoints: (nameFromSelect?: string) => void; modelOptions: string[]; visionModelOptions: string[]; aiEndpointPresetNames: string[]; activateBuiltinExperience: (inviteCode: string) => Promise<void>; builtinQuota: BuiltinQuota | null; testAiConnection: () => void; testLastCropRecognition: () => void; testPersonaReply: () => void; debugSample: DebugSample | null; diagnostics: DiagnosticsState; setDiagnosticsEnabled: (enabled: boolean) => void; copyDiagnosticsJson: () => void; clearDiagnosticLogs: () => void; historyEntries: HistoryEntry[]; activeThreadId: string; clearConversationHistory: () => void; onClose: () => void }) {
+  const [inviteCode, setInviteCode] = useState('');
+  const [activationError, setActivationError] = useState('');
+  const [activating, setActivating] = useState(false);
+
+  async function activateBuiltin() {
+    setActivating(true);
+    setActivationError('');
+    try {
+      await activateBuiltinExperience(inviteCode.trim());
+      setInviteCode('');
+    } catch (error) {
+      setActivationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActivating(false);
+    }
+  }
+
   return (
     <div
       className="settings-overlay"
@@ -2286,6 +2703,28 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
         </header>
 
         <Section id="ai" title="AI 接入" settings={settings} toggleSection={toggleSection}>
+          <Field label="AI 服务">
+            <select value={settings.ai.serviceMode} onChange={(e) => updateSettings((d) => { d.ai.serviceMode = e.target.value as Settings['ai']['serviceMode']; })}>
+              <option value="builtin">内置体验（无需 API）</option>
+              <option value="custom">使用自己的 API</option>
+            </select>
+          </Field>
+          {settings.ai.serviceMode === 'builtin' ? (
+            settings.ai.builtinSessionToken ? (
+              <>
+                <p className="hint-text">内置体验已启用。今日剩余 <strong>{builtinQuota?.remaining ?? '—'}</strong> / {builtinQuota?.dailyQuota ?? 300} 次；只有成功回信才计数，重读不扣额度。</p>
+                <button type="button" onClick={() => updateSettings((d) => { d.ai.builtinSessionToken = ''; d.ai.enabled = false; })}>更换体验账号</button>
+              </>
+            ) : (
+              <>
+                <Field label="体验邀请码"><input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} placeholder="输入邀请码" /></Field>
+                <button type="button" disabled={activating || !inviteCode.trim()} onClick={activateBuiltin}>{activating ? '正在启用…' : '启用内置体验'}</button>
+                {activationError && <p className="hint-text">{activationError}</p>}
+                <p className="hint-text">内置模型由服务端管理，网页不会收到模型地址、名称或 Key。</p>
+              </>
+            )
+          ) : (
+            <>
           <div className="check-row">
             <label><input type="checkbox" checked={settings.ai.enabled} onChange={(e) => updateSettings((d) => { d.ai.enabled = e.target.checked; })} /> 启用真实 AI 回信</label>
           </div>
@@ -2315,15 +2754,19 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
               <option value="scribble">随手写识别模式：只用 iPad 转文字</option>
             </select>
           </Field>
-          <Field label="处理模式">
-            <select value={settings.ai.replyPipeline} onChange={(e) => updateSettings((d) => { d.ai.replyPipeline = e.target.value as Settings['ai']['replyPipeline']; })}>
-              <option value="stable">稳定两段式：先识字，再回信</option>
-              <option value="fast-single">快速单请求：图片直接回信</option>
+          <Field label="回复模型直读能力">
+            <select value={settings.ai.replyVisionCapability} onChange={(e) => updateSettings((d) => { d.ai.replyVisionCapability = e.target.value as Settings['ai']['replyVisionCapability']; })}>
+              <option value="auto">自动检测（推荐）</option>
+              <option value="supported">支持图片，直接回信</option>
+              <option value="unsupported">不支持图片，先由识字模型转写</option>
             </select>
           </Field>
-          <p className="hint-text">如果主模型没有视觉识别能力，开启“分工模式”：让补充视觉模型先读图识字，再由主回复模型负责真正回信。</p>
-          <ModelPicker label="主回复模型" value={settings.ai.model} options={modelOptions} fallback="gpt-4o-mini" onChange={(value) => updateSettings((d) => { d.ai.model = value; })} />
-          <ModelPicker label="补充视觉模型（先识字）" value={settings.ai.visionModel} options={visionModelOptions} fallback="可留空使用主回复模型" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.visionModel = value; })} />
+          <p className="hint-text">系统优先让回复模型直接读图；只有明确不支持图片时，才切换识字模型，不会把超时或限流误判成能力问题。</p>
+          <ModelPicker label="回复模型" value={settings.ai.model} options={modelOptions} fallback="gpt-4o-mini" onChange={(value) => updateSettings((d) => { d.ai.model = value; d.ai.replyVisionCapability = 'auto'; })} />
+          <ModelPicker label="识字模型" value={settings.ai.visionModel} options={visionModelOptions} fallback="纯文本回复模型需要配置" allowEmpty onChange={(value) => updateSettings((d) => { d.ai.visionModel = value; })} />
+              <p className="hint-text">API Key 只保存在当前浏览器。请不要在公用设备上保存 Key。</p>
+            </>
+          )}
           <Field label="创造性">
             <select value={settings.ai.temperature} onChange={(e) => updateSettings((d) => { d.ai.temperature = Number(e.target.value); })}>
               <option value="0">低（确定）</option>
@@ -2401,7 +2844,16 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
           <Field label="字体">
             <select value={settings.font.selectedFontId} onChange={(e) => updateSettings((d) => { d.font.selectedFontId = e.target.value; })}>{FONT_OPTIONS.map((font) => <option key={font.id} value={font.id}>{font.name}</option>)}</select>
           </Field>
-          <Field label={`字号 ${settings.font.fontSizePx}px`}><input type="range" min="16" max="96" value={settings.font.fontSizePx} onChange={(e) => updateSettings((d) => { d.font.fontSizePx = Number(e.target.value); d.font.sizePreset = 'custom'; })} /></Field>
+          <Field label="字号档位">
+            <select value={settings.font.sizePreset} onChange={(e) => updateSettings((d) => { const value = e.target.value as Settings['font']['sizePreset']; d.font.sizePreset = value; if (value === 'small') d.font.fontSizePx = 20; if (value === 'medium') d.font.fontSizePx = 32; if (value === 'large') d.font.fontSizePx = 52; })}>
+              <option value="small">小 · 20px</option>
+              <option value="medium">中 · 32px</option>
+              <option value="large">大 · 52px</option>
+              <option value="custom">自定义</option>
+            </select>
+          </Field>
+          <Field label={`自定义字号 ${settings.font.fontSizePx}px`}><input type="range" min="14" max="96" value={settings.font.fontSizePx} onChange={(e) => updateSettings((d) => { d.font.fontSizePx = Number(e.target.value); d.font.sizePreset = 'custom'; })} /></Field>
+          <FontPreview settings={settings} />
           <Field label="高级字体">
             <details><summary>展开高级字体设置</summary>
             <div style={{display:'grid', gap:'8px', marginTop:'8px'}}>
@@ -2456,11 +2908,11 @@ function SettingsPanel({ settings, updateSettings, resetSettings, toggleSection,
         </Section>
 
         <Section id="reply" title="回信位置" settings={settings} toggleSection={toggleSection}>
-          <Field label="回信出现位置">
+          <p className="hint-text">默认从用户首行首字的左上角开始回信；空间不足时只做最小幅度修正。</p>
+          <Field label="高级位置">
             <select value={settings.reply.positionMode} onChange={(e) => updateSettings((d) => { d.reply.positionMode = e.target.value as ReplyPositionMode; })}>
-              <option value="auto">自动：优先靠近书写区域</option>
-              <option value="fixed-center">固定中部</option>
-              <option value="follow-writing">跟随书写</option>
+              <option value="follow-writing">跟随首字（默认）</option>
+              <option value="fixed-center">固定居中</option>
             </select>
           </Field>
         </Section>

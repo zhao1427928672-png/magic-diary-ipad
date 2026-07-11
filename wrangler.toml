@@ -2,3 +2,20 @@ name = "magic-diary-ai-proxy"
 main = "worker/magic-diary-ai-proxy.js"
 compatibility_date = "2026-07-07"
 workers_dev = true
+
+[vars]
+BUILTIN_DAILY_QUOTA = "300"
+
+[[kv_namespaces]]
+binding = "MAGIC_DIARY_KV"
+id = "e9c3958d4396470693817fa142053aa5"
+
+# Configure these with `wrangler secret put`, never commit their values:
+# BUILTIN_API_BASE
+# BUILTIN_API_KEY
+# BUILTIN_REPLY_MODEL (comma-separated fallback list)
+# BUILTIN_VISION_MODEL (comma-separated fallback list)
+# BUILTIN_REPLY_SUPPORTS_VISION (optional, defaults to true)
+# SESSION_SIGNING_KEY
+# MAGIC_DIARY_INVITE_CODES
+# TURNSTILE_SECRET_KEY (optional during private testing)
